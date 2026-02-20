@@ -92,36 +92,36 @@ else:
         st.markdown("[👉 Upgrade to Premium for Unlimited Access](https://buy.stripe.com/dRm4gzdjLdw66JQbJ5bsc00)", unsafe_allow_html=True)
         st.warning("You're currently using the free tier.")
 
-    with st.form("med_form"):
-        num_meds = st.number_input("Number of existing medications", min_value=0, max_value=10, step=1)
+    num_meds = st.number_input("Number of existing medications", min_value=0, max_value=10, step=1)
 
-        meds = []
-        for i in range(int(num_meds)):
-            name = st.text_input(f"Medication {i+1} Name", key=f"name_{i}")
-            daily_dose = st.number_input(f"Daily Dose for Medication {i+1}", min_value=1, key=f"dose_{i}")
-            remaining = st.number_input(f"Units Remaining for Medication {i+1}", min_value=0, key=f"remaining_{i}")
-            meds.append({'name': name, 'daily_dose': daily_dose, 'remaining': remaining})
+    meds = []
+    for i in range(int(num_meds)):
+        name = st.text_input(f"Medication {i+1} Name", key=f"name_{i}")
+        daily_dose = st.number_input(f"Daily Dose for Medication {i+1}", min_value=1, key=f"dose_{i}")
+        remaining = st.number_input(f"Units Remaining for Medication {i+1}", min_value=0, key=f"remaining_{i}")
+        meds.append({'name': name, 'daily_dose': daily_dose, 'remaining': remaining})
 
-        st.markdown("### New Medication Details")
-        new_name = st.text_input("New Medication Name", key="new_name")
-        new_dose = st.number_input("New Medication Daily Dose", min_value=1, key="new_dose")
+    st.markdown("### New Medication Details")
+    new_name = st.text_input("New Medication Name", key="new_name")
+    new_dose = st.number_input("New Medication Daily Dose", min_value=1, key="new_dose")
+    sync_date = st.date_input("Desired Sync Date")
 
-        sync_date = st.date_input("Desired Sync Date")
-        submitted = st.form_submit_button("Calculate")
+    st.divider()
 
-    if submitted:
-        if not st.session_state["is_premium"] and int(num_meds) > 2:
-            st.error("Upgrade to premium to sync more than 2 medications.")
-        else:
-            result, error = calculate_sync_quantities(
-                tuple(tuple(sorted(m.items())) for m in meds),
-                new_name,
-                int(new_dose),
-                sync_date.strftime("%Y-%m-%d"),
-            )
-            if error:
-                st.error(error)
-            elif result:
-                st.subheader("Sync Plan")
-                for med in result:
-                    st.write(f"**{med['name']}**: {med['units_needed']} units needed to sync by {sync_date}")
+    if not st.session_state["is_premium"] and int(num_meds) > 2:
+        st.error("Upgrade to premium to sync more than 2 medications.")
+    elif new_name and all(m['name'] for m in meds):
+        result, error = calculate_sync_quantities(
+            tuple(tuple(sorted(m.items())) for m in meds),
+            new_name,
+            int(new_dose),
+            sync_date.strftime("%Y-%m-%d"),
+        )
+        if error:
+            st.error(error)
+        elif result:
+            st.subheader("Sync Plan")
+            for med in result:
+                st.write(f"**{med['name']}**: {med['units_needed']} units needed to sync by {sync_date}")
+    else:
+        st.info("Fill in medication names above to see the sync plan.")
