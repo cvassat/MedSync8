@@ -1,2 +1,2 @@
-streamlit
-supabase
+streamlit>=1.30.0,<2.0.0
+supabase>=2.0.0,<3.0.0

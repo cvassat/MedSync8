@@ -1,12 +1,18 @@
+import os
 
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime
 
-SUPABASE_URL = "https://slwbhftsdffvsiazhrjg.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNsd2JoZnRzZGZmdnNpYXpocmpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc2Nzc3NzQsImV4cCI6MjA2MzI1Mzc3NH0.wScgpTbOkRj-Bz-V7IWNvOHBdt_eZ3kpQTr9UGhgz_k"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("Missing SUPABASE_URL or SUPABASE_KEY environment variables. Please configure them before running.")
+    st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 def show_login():
     st.title("Login to Medication Sync App")
@@ -16,35 +22,44 @@ def show_login():
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
         if st.button("Login"):
-            try:
-                user = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                if user:
-                    st.session_state['user'] = user
-                    st.success("Logged in successfully!")
-            except Exception as e:
-                st.error("Login failed: " + str(e))
+            if not email or not password:
+                st.error("Please enter both email and password.")
+            else:
+                try:
+                    user = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    if user:
+                        st.session_state['user'] = user
+                        st.success("Logged in successfully!")
+                        st.rerun()
+                except Exception as e:
+                    st.error("Login failed: " + str(e))
 
     with signup_tab:
         new_email = st.text_input("New Email", key="signup_email")
         new_password = st.text_input("New Password", type="password", key="signup_password")
         if st.button("Sign Up"):
-            try:
-                supabase.auth.sign_up({"email": new_email, "password": new_password})
-                st.success("Sign-up successful! Please check your email to confirm.")
-            except Exception as e:
-                st.error("Sign-up failed: " + str(e))
+            if not new_email or not new_password:
+                st.error("Please enter both email and password.")
+            else:
+                try:
+                    supabase.auth.sign_up({"email": new_email, "password": new_password})
+                    st.success("Sign-up successful! Please check your email to confirm.")
+                except Exception as e:
+                    st.error("Sign-up failed: " + str(e))
+
 
 def calculate_sync_quantities(current_meds, new_med, sync_date):
     results = []
     sync_date = datetime.strptime(sync_date, "%Y-%m-%d")
-    today = datetime.today()
+    today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
     days_until_sync = (sync_date - today).days
 
     if days_until_sync < 0:
-        st.error("Sync date must be in the future")
         return []
 
     for med in current_meds:
+        if med['daily_dose'] <= 0:
+            continue
         days_left = med['remaining'] // med['daily_dose']
         additional_days_needed = days_until_sync - days_left
         units_needed = max(additional_days_needed * med['daily_dose'], 0)
@@ -54,26 +69,35 @@ def calculate_sync_quantities(current_meds, new_med, sync_date):
             'units_needed': units_needed
         })
 
-    new_med_units = new_med['daily_dose'] * days_until_sync
-    results.append({
-        'name': new_med['name'] + " (new)",
-        'days_left': 0,
-        'units_needed': new_med_units
-    })
+    if new_med['daily_dose'] > 0:
+        new_med_units = new_med['daily_dose'] * days_until_sync
+        results.append({
+            'name': new_med['name'] + " (new)",
+            'days_left': 0,
+            'units_needed': new_med_units
+        })
 
     return results
+
 
 if 'user' not in st.session_state:
     show_login()
 else:
     st.title("Medication Sync Calculator")
 
+    if st.sidebar.button("Logout"):
+        del st.session_state['user']
+        st.rerun()
+
     if "is_premium" not in st.session_state:
         st.session_state["is_premium"] = False
 
+    stripe_link = os.environ.get("STRIPE_PAYMENT_LINK", "")
+
     st.write("Free users can sync up to 2 medications.")
     if not st.session_state["is_premium"]:
-        st.markdown(f"[👉 Upgrade to Premium for Unlimited Access](https://buy.stripe.com/dRm4gzdjLdw66JQbJ5bsc00)", unsafe_allow_html=True)
+        if stripe_link:
+            st.markdown(f"[Upgrade to Premium for Unlimited Access]({stripe_link})")
         st.warning("You're currently using the free tier.")
 
     with st.form("med_form"):
@@ -103,3 +127,5 @@ else:
             st.subheader("Sync Plan")
             for med in result:
                 st.write(f"**{med['name']}**: {med['units_needed']} units needed to sync by {sync_date}")
+        elif (sync_date - datetime.today().date()).days < 0:
+            st.error("Sync date must be in the future.")
