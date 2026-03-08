@@ -1,20 +1,22 @@
 import os
 
 import streamlit as st
-from supabase import create_client, Client
 from datetime import datetime
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Missing SUPABASE_URL or SUPABASE_KEY environment variables. Please configure them before running.")
-    st.stop()
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+from sync_calculator import calculate_sync_quantities
 
 
-def show_login():
+def init_supabase():
+    from supabase import create_client, Client
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        st.error("Missing SUPABASE_URL or SUPABASE_KEY environment variables. Please configure them before running.")
+        st.stop()
+    return create_client(url, key)
+
+
+def show_login(supabase):
     st.title("Login to Medication Sync App")
     login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
 
@@ -48,41 +50,7 @@ def show_login():
                     st.error("Sign-up failed: " + str(e))
 
 
-def calculate_sync_quantities(current_meds, new_med, sync_date):
-    results = []
-    sync_date = datetime.strptime(sync_date, "%Y-%m-%d")
-    today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-    days_until_sync = (sync_date - today).days
-
-    if days_until_sync < 0:
-        return []
-
-    for med in current_meds:
-        if med['daily_dose'] <= 0:
-            continue
-        days_left = med['remaining'] // med['daily_dose']
-        additional_days_needed = days_until_sync - days_left
-        units_needed = max(additional_days_needed * med['daily_dose'], 0)
-        results.append({
-            'name': med['name'],
-            'days_left': days_left,
-            'units_needed': units_needed
-        })
-
-    if new_med['daily_dose'] > 0:
-        new_med_units = new_med['daily_dose'] * days_until_sync
-        results.append({
-            'name': new_med['name'] + " (new)",
-            'days_left': 0,
-            'units_needed': new_med_units
-        })
-
-    return results
-
-
-if 'user' not in st.session_state:
-    show_login()
-else:
+def show_dashboard():
     st.title("Medication Sync Calculator")
 
     if st.sidebar.button("Logout"):
@@ -102,9 +70,6 @@ else:
 
     with st.form("med_form"):
         num_meds = st.number_input("Number of existing medications", min_value=0, max_value=10, step=1)
-        if not st.session_state["is_premium"] and num_meds > 2:
-            st.error("Upgrade to premium to sync more than 2 medications.")
-            st.stop()
 
         meds = []
         for i in range(num_meds):
@@ -122,6 +87,10 @@ else:
         submitted = st.form_submit_button("Calculate")
 
     if submitted:
+        if not st.session_state["is_premium"] and num_meds > 2:
+            st.error("Upgrade to premium to sync more than 2 medications.")
+            return
+
         result = calculate_sync_quantities(meds, new_med, sync_date.strftime("%Y-%m-%d"))
         if result:
             st.subheader("Sync Plan")
@@ -129,3 +98,16 @@ else:
                 st.write(f"**{med['name']}**: {med['units_needed']} units needed to sync by {sync_date}")
         elif (sync_date - datetime.today().date()).days < 0:
             st.error("Sync date must be in the future.")
+
+
+def main():
+    supabase = init_supabase()
+
+    if 'user' not in st.session_state:
+        show_login(supabase)
+    else:
+        show_dashboard()
+
+
+if __name__ == "__main__":
+    main()
