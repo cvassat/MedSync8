@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { TOOLS, TOOL_COLORS, QUICK_PROMPTS, TEMPLATE_LIBRARY } from "./constants.js";
-import { callClaude } from "./api.js";
+import { callClaudeStream } from "./api.js";
 import { useSavedResponses } from "./hooks/useSavedResponses.js";
+import { useConversations } from "./hooks/useConversations.js";
+import { useConnectionStatus } from "./hooks/useConnectionStatus.js";
 import MessageBubble from "./components/MessageBubble.jsx";
 import Spinner from "./components/Spinner.jsx";
+import SetupBanner from "./components/SetupBanner.jsx";
 
 // ── PDF Export (XSS-safe: uses textContent, never innerHTML) ────────────────
 function exportToPDF(title, content) {
@@ -50,18 +53,46 @@ function useToast() {
   return { toast, showToast: show };
 }
 
+// ── Status Dot ──────────────────────────────────────────────────────────────
+const STATUS_CONFIG = {
+  checking: { color: "#5B7A96", label: "Checking..." },
+  connected: { color: "#5BC98A", label: "Connected" },
+  disconnected: { color: "#D85B5B", label: "Server offline" },
+  "no-api-key": { color: "#E8AA5A", label: "No API key" },
+};
+
+function StatusDot({ status }) {
+  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.checking;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <div
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: cfg.color,
+          boxShadow: `0 0 6px ${cfg.color}66`,
+        }}
+      />
+      <span style={{ fontSize: 10, color: cfg.color, fontFamily: "system-ui" }}>{cfg.label}</span>
+    </div>
+  );
+}
+
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [activeTool, setActiveTool] = useState("policy");
   const [activePanel, setActivePanel] = useState("chat");
-  const [conversations, setConversations] = useState({ policy: [], supervision: [], lecture: [], chat: [] });
+  const { conversations, setConversations, clearConversation } = useConversations();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [templateFilter, setTemplateFilter] = useState("all");
   const { responses: savedResponses, saveResponse, deleteResponse } = useSavedResponses();
   const { toast, showToast } = useToast();
+  const { status: connectionStatus } = useConnectionStatus();
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -69,35 +100,89 @@ export default function App() {
 
   const currentConvo = conversations[activeTool];
   const tool = TOOLS.find((t) => t.id === activeTool);
+  const canSend = connectionStatus === "connected";
 
   const sendMessage = useCallback(
     async (text) => {
       if (!text.trim() || loading) return;
       const userMsg = { role: "user", content: text.trim() };
       const updated = [...conversations[activeTool], userMsg];
-      setConversations((p) => ({ ...p, [activeTool]: updated }));
+
+      // Add user message + empty assistant placeholder
+      setConversations((p) => ({
+        ...p,
+        [activeTool]: [...updated, { role: "assistant", content: "", streaming: true }],
+      }));
       setInput("");
       setLoading(true);
       setActivePanel("chat");
 
+      // Create abort controller for this stream
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
-        const reply = await callClaude(updated, activeTool);
-        setConversations((p) => ({
-          ...p,
-          [activeTool]: [...p[activeTool], { role: "assistant", content: reply }],
-        }));
+        const toolId = activeTool;
+        await callClaudeStream(
+          updated,
+          toolId,
+          (chunk) => {
+            setConversations((prev) => {
+              const convo = [...prev[toolId]];
+              const last = convo[convo.length - 1];
+              convo[convo.length - 1] = { ...last, content: last.content + chunk };
+              return { ...prev, [toolId]: convo };
+            });
+          },
+          controller.signal
+        );
+
+        // Mark streaming complete
+        setConversations((prev) => {
+          const convo = [...prev[toolId]];
+          const last = convo[convo.length - 1];
+          convo[convo.length - 1] = { ...last, streaming: false };
+          return { ...prev, [toolId]: convo };
+        });
       } catch (e) {
-        setConversations((p) => ({
-          ...p,
-          [activeTool]: [...p[activeTool], { role: "assistant", content: `\u26A0\uFE0F Error: ${e.message}` }],
-        }));
+        if (e.name === "AbortError") return;
+        const toolId = activeTool;
+        setConversations((prev) => {
+          const convo = [...prev[toolId]];
+          const last = convo[convo.length - 1];
+          // If we got partial content, preserve it and append error
+          const partial = last.content;
+          const errorMsg = partial
+            ? `${partial}\n\n\u26A0\uFE0F Stream interrupted: ${e.message}`
+            : `\u26A0\uFE0F Error: ${e.message}`;
+          convo[convo.length - 1] = { role: "assistant", content: errorMsg, streaming: false };
+          return { ...prev, [toolId]: convo };
+        });
       } finally {
         setLoading(false);
+        abortRef.current = null;
         inputRef.current?.focus();
       }
     },
-    [activeTool, conversations, loading]
+    [activeTool, conversations, loading, setConversations]
   );
+
+  // Retry: remove error message, re-send the prior user message
+  const retryLast = useCallback(() => {
+    const convo = conversations[activeTool];
+    if (convo.length < 2) return;
+    const userMsg = convo[convo.length - 2];
+    if (userMsg.role !== "user") return;
+
+    // Remove the error message
+    setConversations((prev) => ({
+      ...prev,
+      [activeTool]: prev[activeTool].slice(0, -1),
+    }));
+
+    // Re-send (slight delay so state settles)
+    setTimeout(() => sendMessage(userMsg.content), 50);
+  }, [activeTool, conversations, setConversations, sendMessage]);
 
   const handleSave = useCallback(
     (content) => {
@@ -142,6 +227,7 @@ export default function App() {
         @keyframes fadeIn { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:translateY(0) } }
         @keyframes spin { to { transform:rotate(360deg) } }
         @keyframes toastIn { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
+        @keyframes blink { 50% { opacity:0 } }
         * { box-sizing: border-box; }
         ::-webkit-scrollbar { width:5px } ::-webkit-scrollbar-thumb { background:rgba(91,155,213,0.25); border-radius:3px }
         .tab-btn:hover { background: rgba(255,255,255,0.06) !important; }
@@ -185,12 +271,15 @@ export default function App() {
               fontSize: 18,
             }}
           >
-            \u2695
+            {"\u2695"}
           </div>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#EAF2FB", letterSpacing: "-0.2px" }}>Psychiatry AI Workbench</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "#EAF2FB", letterSpacing: "-0.2px" }}>Psychiatry AI Workbench</span>
+              <StatusDot status={connectionStatus} />
+            </div>
             <div style={{ fontSize: 11, color: "#3D6080", fontFamily: "system-ui", marginTop: 1 }}>
-              Nuestra Esperanza Health \u00B7 AI-assisted clinical tools
+              Nuestra Esperanza Health {"\u00B7"} AI-assisted clinical tools
             </div>
           </div>
         </div>
@@ -210,9 +299,12 @@ export default function App() {
             transition: "all 0.2s",
           }}
         >
-          {"💾"} {savedResponses.length} Saved
+          {"\uD83D\uDCBE"} {savedResponses.length} Saved
         </button>
       </header>
+
+      {/* ── SETUP BANNER (when no API key) ── */}
+      {connectionStatus === "no-api-key" && <SetupBanner />}
 
       {/* ── TOOL TABS ── */}
       <nav
@@ -237,6 +329,8 @@ export default function App() {
               aria-selected={active}
               className="tab-btn"
               onClick={() => {
+                // Cancel any in-flight stream when switching tools
+                if (abortRef.current) abortRef.current.abort();
                 setActiveTool(t.id);
                 setActivePanel("chat");
               }}
@@ -284,7 +378,7 @@ export default function App() {
               transition: "all 0.2s",
             }}
           >
-            {"📚"} Templates
+            {"\uD83D\uDCDA"} Templates
           </button>
         </div>
       </nav>
@@ -362,7 +456,7 @@ export default function App() {
                       </span>
                     </div>
                     <div style={{ fontSize: 14, color: "#C8DCF0", fontWeight: 600, marginBottom: 6 }}>{tmpl.label}</div>
-                    <div style={{ fontSize: 12, color: "#4A6880", lineHeight: 1.6, fontFamily: "system-ui" }}>{tmpl.prompt.slice(0, 90)}\u2026</div>
+                    <div style={{ fontSize: 12, color: "#4A6880", lineHeight: 1.6, fontFamily: "system-ui" }}>{tmpl.prompt.slice(0, 90)}{"\u2026"}</div>
                     <div
                       style={{
                         marginTop: 12,
@@ -376,7 +470,7 @@ export default function App() {
                         fontFamily: "system-ui",
                       }}
                     >
-                      Use template \u2192
+                      Use template {"\u2192"}
                     </div>
                   </div>
                 );
@@ -390,7 +484,7 @@ export default function App() {
           <div style={{ flex: 1, overflow: "auto", paddingTop: 16, animation: "fadeIn 0.3s" }}>
             {savedResponses.length === 0 ? (
               <div style={{ textAlign: "center", padding: 48, color: "#2E4A60" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>{"💾"}</div>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>{"\uD83D\uDCBE"}</div>
                 <div style={{ fontFamily: "system-ui", fontSize: 14 }}>No saved responses yet.</div>
                 <div style={{ fontFamily: "system-ui", fontSize: 12, marginTop: 6 }}>Hover over any AI response to save it.</div>
               </div>
@@ -439,7 +533,7 @@ export default function App() {
                             fontFamily: "system-ui",
                           }}
                         >
-                          {"🖨"} PDF
+                          {"\uD83D\uDDA8"} PDF
                         </button>
                         <button
                           onClick={() => handleCopy(r.content)}
@@ -455,7 +549,7 @@ export default function App() {
                             fontFamily: "system-ui",
                           }}
                         >
-                          {"📋"} Copy
+                          {"\uD83D\uDCCB"} Copy
                         </button>
                         <button
                           onClick={() => handleDelete(r.id)}
@@ -471,7 +565,7 @@ export default function App() {
                             fontFamily: "system-ui",
                           }}
                         >
-                          \u2715
+                          {"\u2715"}
                         </button>
                       </div>
                     </div>
@@ -487,7 +581,7 @@ export default function App() {
                         fontFamily: "Georgia,serif",
                       }}
                     >
-                      {r.content.slice(0, 300)}\u2026
+                      {r.content.slice(0, 300)}{"\u2026"}
                       <div
                         style={{
                           position: "absolute",
@@ -520,6 +614,7 @@ export default function App() {
                       key={i}
                       className="qbtn"
                       onClick={() => sendMessage(p)}
+                      disabled={!canSend}
                       style={{
                         display: "block",
                         width: "100%",
@@ -529,15 +624,15 @@ export default function App() {
                         background: "rgba(14,28,45,0.6)",
                         border: "1px solid rgba(91,155,213,0.12)",
                         borderRadius: 10,
-                        color: "#7AB8D8",
-                        cursor: "pointer",
+                        color: canSend ? "#7AB8D8" : "#2E4A60",
+                        cursor: canSend ? "pointer" : "not-allowed",
                         fontSize: 13,
                         fontFamily: "Georgia,serif",
                         lineHeight: 1.5,
                         transition: "all 0.2s",
                       }}
                     >
-                      <span style={{ color: TOOL_COLORS[activeTool], marginRight: 8 }}>\u2192</span>
+                      <span style={{ color: TOOL_COLORS[activeTool], marginRight: 8 }}>{"\u2192"}</span>
                       {p}
                     </button>
                   ))}
@@ -549,12 +644,18 @@ export default function App() {
                       key={i}
                       role={msg.role}
                       content={msg.content}
+                      streaming={msg.streaming}
                       onSave={() => handleSave(msg.content)}
                       onExport={() => exportToPDF(`${tool.label} \u2014 ${new Date().toLocaleDateString()}`, msg.content)}
                       onCopy={() => handleCopy(msg.content)}
+                      onRetry={
+                        // Only offer retry on the last message if it's an error
+                        i === currentConvo.length - 1 && msg.role === "assistant" && msg.content.startsWith("\u26A0")
+                          ? retryLast
+                          : undefined
+                      }
                     />
                   ))}
-                  {loading && <Spinner />}
                   <div ref={bottomRef} style={{ height: 40 }} />
                 </>
               )}
@@ -581,12 +682,19 @@ export default function App() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    sendMessage(input);
+                    if (canSend) sendMessage(input);
                   }
                 }}
-                placeholder={`${tool.icon} ${tool.desc} \u2014 describe what you need\u2026`}
+                placeholder={
+                  canSend
+                    ? `${tool.icon} ${tool.desc} \u2014 describe what you need\u2026`
+                    : connectionStatus === "no-api-key"
+                      ? "Set up your API key to get started..."
+                      : "Waiting for server connection..."
+                }
                 aria-label="Message input"
                 rows={2}
+                disabled={!canSend}
                 style={{
                   flex: 1,
                   background: "transparent",
@@ -596,12 +704,17 @@ export default function App() {
                   fontSize: 14,
                   lineHeight: 1.6,
                   resize: "none",
+                  opacity: canSend ? 1 : 0.5,
                 }}
               />
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {currentConvo.length > 0 && (
                   <button
-                    onClick={() => setConversations((p) => ({ ...p, [activeTool]: [] }))}
+                    onClick={() => {
+                      if (abortRef.current) abortRef.current.abort();
+                      clearConversation(activeTool);
+                      setLoading(false);
+                    }}
                     aria-label="Clear conversation"
                     style={{
                       padding: "4px 8px",
@@ -620,29 +733,29 @@ export default function App() {
                 <button
                   className="send"
                   onClick={() => sendMessage(input)}
-                  disabled={loading || !input.trim()}
+                  disabled={loading || !input.trim() || !canSend}
                   aria-label="Send message"
                   style={{
                     padding: "9px 16px",
                     borderRadius: 10,
                     fontSize: 18,
                     background:
-                      !input.trim() || loading
+                      !input.trim() || loading || !canSend
                         ? "rgba(44,95,138,0.15)"
                         : `linear-gradient(135deg, ${TOOL_COLORS[activeTool]}, #1A3D5C)`,
                     border: "none",
-                    color: !input.trim() || loading ? "#2E4A60" : "#EAF2FB",
-                    cursor: !input.trim() || loading ? "not-allowed" : "pointer",
+                    color: !input.trim() || loading || !canSend ? "#2E4A60" : "#EAF2FB",
+                    cursor: !input.trim() || loading || !canSend ? "not-allowed" : "pointer",
                     transition: "all 0.2s",
-                    boxShadow: !input.trim() || loading ? "none" : "0 4px 16px rgba(44,95,138,0.35)",
+                    boxShadow: !input.trim() || loading || !canSend ? "none" : "0 4px 16px rgba(44,95,138,0.35)",
                   }}
                 >
-                  \u2191
+                  {"\u2191"}
                 </button>
               </div>
             </div>
             <div style={{ textAlign: "center", fontSize: 10, color: "#1E3348", fontFamily: "system-ui", marginTop: 6 }}>
-              Enter to send \u00B7 Shift+Enter for new line \u00B7 AI-generated \u2014 apply clinical judgment before use
+              Enter to send {"\u00B7"} Shift+Enter for new line {"\u00B7"} AI-generated {"\u2014"} apply clinical judgment before use
             </div>
           </>
         )}

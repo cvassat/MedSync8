@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 
-export default React.memo(function MessageBubble({ role, content, onSave, onExport, onCopy }) {
+const isErrorMessage = (content) => content.startsWith("\u26A0");
+
+export default React.memo(function MessageBubble({ role, content, streaming, onSave, onExport, onCopy, onRetry }) {
   const isUser = role === "user";
+  const isError = !isUser && isErrorMessage(content);
   const [hover, setHover] = useState(false);
 
   return (
@@ -33,17 +36,25 @@ export default React.memo(function MessageBubble({ role, content, onSave, onExpo
             boxShadow: "0 2px 10px rgba(0,0,0,0.3)",
           }}
         >
-          \u2695\uFE0F
+          {"\u2695\uFE0F"}
         </div>
       )}
       <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} style={{ maxWidth: "80%", position: "relative" }}>
         <div
           style={{
-            background: isUser ? "linear-gradient(135deg, #2C5F8A, #1A3D5C)" : "rgba(20,35,52,0.8)",
-            border: isUser ? "none" : "1px solid rgba(91,155,213,0.15)",
+            background: isUser
+              ? "linear-gradient(135deg, #2C5F8A, #1A3D5C)"
+              : isError
+                ? "rgba(52,20,20,0.8)"
+                : "rgba(20,35,52,0.8)",
+            border: isUser
+              ? "none"
+              : isError
+                ? "1px solid rgba(213,91,91,0.25)"
+                : "1px solid rgba(91,155,213,0.15)",
             borderRadius: isUser ? "16px 16px 3px 16px" : "3px 16px 16px 16px",
             padding: "11px 15px",
-            color: isUser ? "#EAF2FB" : "#C8DCF0",
+            color: isUser ? "#EAF2FB" : isError ? "#E0A0A0" : "#C8DCF0",
             fontSize: 13.5,
             lineHeight: 1.75,
             fontFamily: "Georgia,serif",
@@ -52,8 +63,44 @@ export default React.memo(function MessageBubble({ role, content, onSave, onExpo
           }}
         >
           {content}
+          {streaming && (
+            <span
+              style={{
+                display: "inline-block",
+                width: 2,
+                height: "1em",
+                background: "#5B9BD5",
+                marginLeft: 2,
+                verticalAlign: "text-bottom",
+                animation: "blink 1s step-end infinite",
+              }}
+            />
+          )}
         </div>
-        {!isUser && hover && (
+
+        {/* Retry button for error messages */}
+        {isError && onRetry && (
+          <button
+            onClick={onRetry}
+            style={{
+              marginTop: 8,
+              padding: "5px 14px",
+              borderRadius: 8,
+              background: "rgba(138,44,44,0.2)",
+              border: "1px solid rgba(213,91,91,0.3)",
+              color: "#D89090",
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "system-ui",
+              transition: "all 0.2s",
+            }}
+          >
+            {"\u21BB"} Retry
+          </button>
+        )}
+
+        {/* Action buttons on hover */}
+        {!isUser && !isError && hover && !streaming && (
           <div
             style={{
               position: "absolute",
@@ -66,9 +113,9 @@ export default React.memo(function MessageBubble({ role, content, onSave, onExpo
             }}
           >
             {[
-              ["💾 Save", onSave],
-              ["🖨 Export PDF", onExport],
-              ["📋 Copy", onCopy],
+              ["\uD83D\uDCBE Save", onSave],
+              ["\uD83D\uDDA8 Export PDF", onExport],
+              ["\uD83D\uDCCB Copy", onCopy],
             ].map(([label, fn]) => (
               <button
                 key={label}

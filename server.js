@@ -30,28 +30,45 @@ const VALID_TOOLS = new Set(Object.keys(SYSTEM_PROMPTS));
 // ── Anthropic Client ────────────────────────────────────────────────────────
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── Shared validation ────────────────────────────────────────────────────────
+function validateRequest(body) {
+  const { messages, tool, maxTokens } = body;
+
+  if (!tool || !VALID_TOOLS.has(tool)) {
+    return { error: `Invalid tool. Must be one of: ${[...VALID_TOOLS].join(", ")}`, status: 400 };
+  }
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { error: "Messages must be a non-empty array.", status: 400 };
+  }
+
+  const sanitizedMessages = messages.map((m) => ({
+    role: m.role === "user" ? "user" : "assistant",
+    content: String(m.content).slice(0, 50_000),
+  }));
+
+  const tokens = Math.min(Math.max(Number(maxTokens) || 4096, 256), 8192);
+
+  return { sanitizedMessages, tokens, tool };
+}
+
+function handleApiError(err, res) {
+  console.error("Claude API error:", err.message);
+  if (err.status === 429) {
+    return res.status(429).json({ error: "Rate limited by Anthropic. Please wait and try again." });
+  }
+  if (err.status === 401) {
+    return res.status(500).json({ error: "Invalid API key. Check your ANTHROPIC_API_KEY." });
+  }
+  res.status(500).json({ error: "Failed to get response. Please try again." });
+}
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 app.post("/api/claude", apiLimiter, async (req, res) => {
   try {
-    const { messages, tool, maxTokens } = req.body;
+    const result = validateRequest(req.body);
+    if (result.error) return res.status(result.status).json({ error: result.error });
 
-    // Validate tool
-    if (!tool || !VALID_TOOLS.has(tool)) {
-      return res.status(400).json({ error: `Invalid tool. Must be one of: ${[...VALID_TOOLS].join(", ")}` });
-    }
-
-    // Validate messages
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "Messages must be a non-empty array." });
-    }
-
-    // Sanitize messages — only allow role + content strings
-    const sanitizedMessages = messages.map((m) => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: String(m.content).slice(0, 50_000),
-    }));
-
-    const tokens = Math.min(Math.max(Number(maxTokens) || 4096, 256), 8192);
+    const { sanitizedMessages, tokens, tool } = result;
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
@@ -63,16 +80,65 @@ app.post("/api/claude", apiLimiter, async (req, res) => {
     const text = response.content?.find((b) => b.type === "text")?.text ?? "No response received.";
     res.json({ text });
   } catch (err) {
-    console.error("Claude API error:", err.message);
+    handleApiError(err, res);
+  }
+});
 
-    if (err.status === 429) {
-      return res.status(429).json({ error: "Rate limited by Anthropic. Please wait and try again." });
-    }
-    if (err.status === 401) {
-      return res.status(500).json({ error: "Invalid API key. Check your ANTHROPIC_API_KEY." });
-    }
+// ── Streaming endpoint (SSE) ────────────────────────────────────────────────
+app.post("/api/claude/stream", apiLimiter, async (req, res) => {
+  const result = validateRequest(req.body);
+  if (result.error) return res.status(result.status).json({ error: result.error });
 
-    res.status(500).json({ error: "Failed to get response. Please try again." });
+  const { sanitizedMessages, tokens, tool } = result;
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.flushHeaders();
+
+  let aborted = false;
+
+  try {
+    const stream = anthropic.messages.stream({
+      model: "claude-sonnet-4-6",
+      max_tokens: tokens,
+      system: SYSTEM_PROMPTS[tool],
+      messages: sanitizedMessages,
+    });
+
+    // Abort if client disconnects
+    req.on("close", () => {
+      aborted = true;
+      stream.abort();
+    });
+
+    stream.on("text", (text) => {
+      if (!aborted) {
+        res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      }
+    });
+
+    await stream.finalMessage();
+
+    if (!aborted) {
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }
+  } catch (err) {
+    console.error("Stream error:", err.message);
+    if (!aborted) {
+      const msg =
+        err.status === 429
+          ? "Rate limited by Anthropic. Please wait and try again."
+          : err.status === 401
+            ? "Invalid API key. Check your ANTHROPIC_API_KEY."
+            : "Stream interrupted. Please try again.";
+      res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }
   }
 });
 
