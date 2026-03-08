@@ -21,6 +21,11 @@ env/
 *.swp
 *.swo
 
+# Node.js
+node_modules/
+dist/
+.env.local
+
 # OS
 .DS_Store
 Thumbs.db

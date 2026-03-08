@@ -1,66 +1,84 @@
-# MedSync8
+# Psychiatry AI Workbench
 
-A Streamlit web application for medication synchronization management. MedSync8 helps users calculate how many medication units they need to align multiple medications to a single refill date.
+A clinical AI workbench for psychiatric practice — built with React + Express, powered by Claude.
 
 ## Features
 
-- **Medication Sync Calculator** — Enter your current medications with remaining units and daily doses, add a new medication, and get a sync plan showing how many additional units you need for each medication to align on a single refill date.
-- **User Authentication** — Sign up and log in via Supabase auth.
-- **Premium Tier** — Free users can sync up to 2 medications. Premium users (via Stripe) get unlimited access.
+- **Policy Generator** — Create legally defensible clinical policies and procedures with DEA/PDMP regulatory citations
+- **Supervision Tools** — Generate NP/PA supervision checklists, competency assessments, and feedback frameworks
+- **Lecture Builder** — Build CME-accredited educational content with learning objectives, case vignettes, and clinical pearls
+- **Clinical Consult** — Expert consultation for telepsychiatry, controlled substance prescribing, and practice management
+- **Template Library** — 8 pre-built templates for common clinical workflows
+- **Save & Export** — Save responses locally, export to PDF, copy to clipboard
+- **Persistent Storage** — Saved responses survive page refreshes (localStorage)
 
 ## Setup
 
 ### Prerequisites
 
-- Python 3.11+
-- A [Supabase](https://supabase.com) project (for authentication)
-- A [Stripe](https://stripe.com) payment link (optional, for premium tier)
+- Node.js 20+
+- An [Anthropic API key](https://console.anthropic.com/)
 
 ### Installation
 
 ```bash
-pip install -r requirements.txt
+npm install
 ```
 
 ### Configuration
-
-Copy the example environment file and fill in your credentials:
 
 ```bash
 cp .env.example .env
 ```
 
-Required environment variables:
+Add your Anthropic API key to `.env`:
 
 | Variable | Description |
 |---|---|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_KEY` | Your Supabase anon/public API key |
-| `STRIPE_PAYMENT_LINK` | (Optional) Stripe payment link for premium upgrades |
+| `ANTHROPIC_API_KEY` | **(Required)** Your Anthropic API key |
+| `PORT` | Server port (default: 3001) |
+| `ALLOWED_ORIGIN` | CORS origin (default: http://localhost:5173) |
 
 ### Running
 
 ```bash
+npm run dev
+```
+
+This starts both the Vite frontend (port 5173) and Express API server (port 3001).
+
+### GitHub Codespaces
+
+This project includes a dev container configuration. Open it in GitHub Codespaces and both servers start automatically.
+
+## Architecture
+
+```
+├── server.js              # Express API proxy (keeps API key server-side)
+├── src/
+│   ├── App.jsx            # Main workbench UI
+│   ├── api.js             # Client-side API calls to /api/claude
+│   ├── constants.js       # Tools, prompts, templates
+│   ├── hooks/
+│   │   └── useSavedResponses.js  # localStorage persistence
+│   └── components/
+│       ├── MessageBubble.jsx
+│       └── Spinner.jsx
+├── vite.config.js         # Vite + API proxy config
+└── index.html
+```
+
+**Security**: The Anthropic API key never leaves the server. The Express proxy validates tool names, sanitizes messages, and enforces rate limits (20 req/min).
+
+## Legacy App
+
+The original Streamlit medication sync calculator is still available:
+
+```bash
+pip install -r requirements.txt
 streamlit run med_sync_app_with_stripe.py
 ```
 
-The app will be available at `http://localhost:8501`.
+---
 
-### Running with GitHub Codespaces
-
-This project includes a dev container configuration. Open it in GitHub Codespaces and the app starts automatically on port 8501.
-
-## Testing
-
-```bash
-python -m unittest discover tests -v
-```
-
-## How It Works
-
-1. Log in or sign up.
-2. Enter the number of existing medications you want to sync.
-3. For each medication, enter its name, daily dose, and remaining units.
-4. Enter the new medication's name and daily dose.
-5. Pick a desired sync date.
-6. Click **Calculate** to see how many additional units of each medication you need to reach the sync date.
+*Nuestra Esperanza Health · AI-assisted drafts require clinical review before use.*
