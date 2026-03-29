@@ -101,6 +101,7 @@ export default function App() {
   const currentConvo = conversations[activeTool];
   const tool = TOOLS.find((t) => t.id === activeTool);
   const canSend = connectionStatus === "connected";
+  const sendDisabled = !input.trim() || loading || !canSend;
 
   const sendMessage = useCallback(
     async (text) => {
@@ -167,21 +168,20 @@ export default function App() {
     [activeTool, conversations, loading, setConversations]
   );
 
-  // Retry: remove error message, re-send the prior user message
   const retryLast = useCallback(() => {
     const convo = conversations[activeTool];
     if (convo.length < 2) return;
     const userMsg = convo[convo.length - 2];
     if (userMsg.role !== "user") return;
+    const textToRetry = userMsg.content;
 
-    // Remove the error message
+    // Remove error, then re-send in the callback to avoid race condition
     setConversations((prev) => ({
       ...prev,
       [activeTool]: prev[activeTool].slice(0, -1),
     }));
-
-    // Re-send (slight delay so state settles)
-    setTimeout(() => sendMessage(userMsg.content), 50);
+    // Use flushSync-free approach: capture text before state update
+    requestAnimationFrame(() => sendMessage(textToRetry));
   }, [activeTool, conversations, setConversations, sendMessage]);
 
   const handleSave = useCallback(
@@ -329,7 +329,6 @@ export default function App() {
               aria-selected={active}
               className="tab-btn"
               onClick={() => {
-                // Cancel any in-flight stream when switching tools
                 if (abortRef.current) abortRef.current.abort();
                 setActiveTool(t.id);
                 setActivePanel("chat");
@@ -414,6 +413,11 @@ export default function App() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
               {filteredTemplates.map((tmpl) => {
                 const color = TOOL_COLORS[tmpl.category];
+                const useTemplate = () => {
+                  setActiveTool(tmpl.category);
+                  setActivePanel("chat");
+                  sendMessage(tmpl.prompt);
+                };
                 return (
                   <div
                     key={tmpl.id}
@@ -421,11 +425,7 @@ export default function App() {
                     role="button"
                     aria-label={`Use template: ${tmpl.label}`}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        setActiveTool(tmpl.category);
-                        setActivePanel("chat");
-                        sendMessage(tmpl.prompt);
-                      }
+                      if (e.key === "Enter" || e.key === " ") useTemplate();
                     }}
                     style={{
                       background: "rgba(14,28,45,0.7)",
@@ -436,11 +436,7 @@ export default function App() {
                       transition: "all 0.2s",
                       animation: "fadeIn 0.3s",
                     }}
-                    onClick={() => {
-                      setActiveTool(tmpl.category);
-                      setActivePanel("chat");
-                      sendMessage(tmpl.prompt);
-                    }}
+                    onClick={useTemplate}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.borderColor = `${color}44`;
                       e.currentTarget.style.background = "rgba(20,38,58,0.9)";
@@ -450,11 +446,9 @@ export default function App() {
                       e.currentTarget.style.background = "rgba(14,28,45,0.7)";
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ fontSize: 10, color, fontFamily: "system-ui", textTransform: "uppercase", letterSpacing: 1 }}>
-                        {TOOLS.find((t) => t.id === tmpl.category)?.icon} {tmpl.category}
-                      </span>
-                    </div>
+                    <span style={{ fontSize: 10, color, fontFamily: "system-ui", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 8 }}>
+                      {TOOLS.find((t) => t.id === tmpl.category)?.icon} {tmpl.category}
+                    </span>
                     <div style={{ fontSize: 14, color: "#C8DCF0", fontWeight: 600, marginBottom: 6 }}>{tmpl.label}</div>
                     <div style={{ fontSize: 12, color: "#4A6880", lineHeight: 1.6, fontFamily: "system-ui" }}>{tmpl.prompt.slice(0, 90)}{"\u2026"}</div>
                     <div
@@ -733,21 +727,20 @@ export default function App() {
                 <button
                   className="send"
                   onClick={() => sendMessage(input)}
-                  disabled={loading || !input.trim() || !canSend}
+                  disabled={sendDisabled}
                   aria-label="Send message"
                   style={{
                     padding: "9px 16px",
                     borderRadius: 10,
                     fontSize: 18,
-                    background:
-                      !input.trim() || loading || !canSend
-                        ? "rgba(44,95,138,0.15)"
-                        : `linear-gradient(135deg, ${TOOL_COLORS[activeTool]}, #1A3D5C)`,
+                    background: sendDisabled
+                      ? "rgba(44,95,138,0.15)"
+                      : `linear-gradient(135deg, ${TOOL_COLORS[activeTool]}, #1A3D5C)`,
                     border: "none",
-                    color: !input.trim() || loading || !canSend ? "#2E4A60" : "#EAF2FB",
-                    cursor: !input.trim() || loading || !canSend ? "not-allowed" : "pointer",
+                    color: sendDisabled ? "#2E4A60" : "#EAF2FB",
+                    cursor: sendDisabled ? "not-allowed" : "pointer",
                     transition: "all 0.2s",
-                    boxShadow: !input.trim() || loading || !canSend ? "none" : "0 4px 16px rgba(44,95,138,0.35)",
+                    boxShadow: sendDisabled ? "none" : "0 4px 16px rgba(44,95,138,0.35)",
                   }}
                 >
                   {"\u2191"}

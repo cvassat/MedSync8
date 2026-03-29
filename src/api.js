@@ -2,6 +2,13 @@
  * Calls the backend proxy which forwards to Claude API.
  * API key is stored server-side only — never exposed to the browser.
  */
+
+function classifyError(res, data) {
+  if (res.status === 429) throw new Error("Rate limited. Please wait a moment before sending another message.");
+  if (data?.error?.includes("API key")) throw new Error("API key is missing or invalid. Check server configuration.");
+  throw new Error(data?.error || `Request failed (${res.status})`);
+}
+
 export async function callClaude(messages, tool) {
   let res;
   try {
@@ -14,15 +21,8 @@ export async function callClaude(messages, tool) {
     throw new Error("Can't reach server. Check your connection.");
   }
 
-  if (res.status === 429) throw new Error("Rate limited. Please wait a moment before sending another message.");
-
   const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    if (data.error?.includes("API key")) throw new Error("API key is missing or invalid. Check server configuration.");
-    throw new Error(data.error || `Request failed (${res.status})`);
-  }
-
+  if (!res.ok) classifyError(res, data);
   return data.text;
 }
 
@@ -46,10 +46,8 @@ export async function callClaudeStream(messages, tool, onChunk, signal) {
   }
 
   if (!res.ok) {
-    if (res.status === 429) throw new Error("Rate limited. Please wait a moment before sending another message.");
     const data = await res.json().catch(() => ({}));
-    if (data.error?.includes("API key")) throw new Error("API key is missing or invalid. Check server configuration.");
-    throw new Error(data.error || `Request failed (${res.status})`);
+    classifyError(res, data);
   }
 
   const reader = res.body.getReader();
@@ -69,9 +67,14 @@ export async function callClaudeStream(messages, tool, onChunk, signal) {
       if (!match) continue;
       if (match[1] === "[DONE]") return;
 
-      const payload = JSON.parse(match[1]);
-      if (payload.error) throw new Error(payload.error);
-      if (payload.text) onChunk(payload.text);
+      try {
+        const payload = JSON.parse(match[1]);
+        if (payload.error) throw new Error(payload.error);
+        if (payload.text) onChunk(payload.text);
+      } catch (e) {
+        if (e.message && e.message !== "Unexpected end of JSON input") throw e;
+        // Skip malformed frames — partial data from network split
+      }
     }
   }
 }
