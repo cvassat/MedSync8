@@ -3,7 +3,7 @@
  * API key is stored server-side only — never exposed to the browser.
  */
 
-function classifyError(res, data) {
+function throwResponseError(res, data) {
   if (res.status === 429) throw new Error("Rate limited. Please wait a moment before sending another message.");
   if (data?.error?.includes("API key")) throw new Error("API key is missing or invalid. Check server configuration.");
   throw new Error(data?.error || `Request failed (${res.status})`);
@@ -22,7 +22,7 @@ export async function callClaude(messages, tool) {
   }
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) classifyError(res, data);
+  if (!res.ok) throwResponseError(res, data);
   return data.text;
 }
 
@@ -47,7 +47,7 @@ export async function callClaudeStream(messages, tool, onChunk, signal) {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    classifyError(res, data);
+    throwResponseError(res, data);
   }
 
   const reader = res.body.getReader();
@@ -72,8 +72,7 @@ export async function callClaudeStream(messages, tool, onChunk, signal) {
         if (payload.error) throw new Error(payload.error);
         if (payload.text) onChunk(payload.text);
       } catch (e) {
-        if (e.message && e.message !== "Unexpected end of JSON input") throw e;
-        // Skip malformed frames — partial data from network split
+        if (!(e instanceof SyntaxError)) throw e;
       }
     }
   }

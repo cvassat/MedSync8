@@ -175,12 +175,10 @@ export default function App() {
     if (userMsg.role !== "user") return;
     const textToRetry = userMsg.content;
 
-    // Remove error, then re-send in the callback to avoid race condition
     setConversations((prev) => ({
       ...prev,
       [activeTool]: prev[activeTool].slice(0, -1),
     }));
-    // Use flushSync-free approach: capture text before state update
     requestAnimationFrame(() => sendMessage(textToRetry));
   }, [activeTool, conversations, setConversations, sendMessage]);
 
