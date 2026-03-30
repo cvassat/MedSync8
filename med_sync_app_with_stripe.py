@@ -31,8 +31,8 @@ def show_login():
                         st.session_state['user'] = user
                         st.success("Logged in successfully!")
                         st.rerun()
-                except Exception as e:
-                    st.error("Login failed: " + str(e))
+                except Exception:
+                    st.error("Login failed. Please check your credentials.")
 
     with signup_tab:
         new_email = st.text_input("New Email", key="signup_email")
@@ -44,8 +44,8 @@ def show_login():
                 try:
                     supabase.auth.sign_up({"email": new_email, "password": new_password})
                     st.success("Sign-up successful! Please check your email to confirm.")
-                except Exception as e:
-                    st.error("Sign-up failed: " + str(e))
+                except Exception:
+                    st.error("Sign-up failed. Please try again.")
 
 
 def calculate_sync_quantities(current_meds, new_med, sync_date):
@@ -86,6 +86,7 @@ else:
     st.title("Medication Sync Calculator")
 
     if st.sidebar.button("Logout"):
+        supabase.auth.sign_out()
         del st.session_state['user']
         st.rerun()
 
@@ -96,7 +97,7 @@ else:
 
     st.write("Free users can sync up to 2 medications.")
     if not st.session_state["is_premium"]:
-        if stripe_link:
+        if stripe_link and stripe_link.startswith("https://"):
             st.markdown(f"[Upgrade to Premium for Unlimited Access]({stripe_link})")
         st.warning("You're currently using the free tier.")
 
