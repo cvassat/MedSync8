@@ -1,21 +1,7 @@
 import unittest
-from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
-import sys
 
-# Set up streamlit mock before importing the app module
-st_mock = MagicMock()
-st_mock.tabs.return_value = (MagicMock(), MagicMock())
-st_mock.session_state = {}
-sys.modules['streamlit'] = st_mock
-sys.modules['supabase'] = MagicMock()
-
-# Set required env vars so the module doesn't call st.stop()
-import os
-os.environ.setdefault('SUPABASE_URL', 'https://test.supabase.co')
-os.environ.setdefault('SUPABASE_KEY', 'test-key')
-
-from med_sync_app_with_stripe import calculate_sync_quantities
+from sync_calculator import calculate_sync_quantities
 
 
 class TestCalculateSyncQuantities(unittest.TestCase):
