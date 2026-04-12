@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { TOOLS, TOOL_COLORS, QUICK_PROMPTS, TEMPLATE_LIBRARY } from "./constants.js";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { TOOLS, TOOL_COLORS, QUICK_PROMPTS, TEMPLATE_LIBRARY, TOOL_MAP, ERROR_PREFIX } from "./constants.js";
 import { callClaudeStream } from "./api.js";
 import { useSavedResponses } from "./hooks/useSavedResponses.js";
 import { useConversations } from "./hooks/useConversations.js";
@@ -8,7 +8,7 @@ import MessageBubble from "./components/MessageBubble.jsx";
 import Spinner from "./components/Spinner.jsx";
 import SetupBanner from "./components/SetupBanner.jsx";
 
-// ── PDF Export (XSS-safe: uses textContent, never innerHTML) ────────────────
+// XSS-safe: uses textContent, never innerHTML
 function exportToPDF(title, content) {
   const win = window.open("", "_blank");
   if (!win) return;
@@ -79,6 +79,27 @@ function StatusDot({ status }) {
   );
 }
 
+const GLOBAL_STYLES = `
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:translateY(0) } }
+  @keyframes spin { to { transform:rotate(360deg) } }
+  @keyframes toastIn { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
+  @keyframes blink { 50% { opacity:0 } }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width:5px } ::-webkit-scrollbar-thumb { background:rgba(91,155,213,0.25); border-radius:3px }
+  .tab-btn:hover { background: rgba(255,255,255,0.06) !important; }
+  .panel-btn:hover { opacity: 0.85; }
+  .qbtn:hover { background: rgba(44,95,138,0.25) !important; border-color: rgba(91,155,213,0.4) !important; }
+  .tbtn:hover { background: rgba(44,95,138,0.2) !important; }
+  .send:hover:not(:disabled) { filter: brightness(1.15); transform: translateY(-1px); }
+  textarea { caret-color: #5B9BD5; }
+  textarea:focus { outline: none; box-shadow: 0 0 0 1px rgba(91,155,213,0.3); border-radius: 4px; }
+  .saved-card:hover { background: rgba(255,255,255,0.05) !important; }
+  @media (max-width: 600px) {
+    .tab-btn { padding: 6px 10px !important; font-size: 12px !important; }
+    .tab-label { display: none; }
+  }
+`;
+
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [activeTool, setActiveTool] = useState("policy");
@@ -107,23 +128,21 @@ export default function App() {
     async (text) => {
       if (!text.trim() || loading) return;
       const userMsg = { role: "user", content: text.trim() };
-      const updated = [...conversations[activeTool], userMsg];
+      const toolId = activeTool;
 
-      // Add user message + empty assistant placeholder
-      setConversations((p) => ({
-        ...p,
-        [activeTool]: [...updated, { role: "assistant", content: "", streaming: true }],
-      }));
+      let updated;
+      setConversations((p) => {
+        updated = [...p[toolId], userMsg];
+        return { ...p, [toolId]: [...updated, { role: "assistant", content: "", streaming: true }] };
+      });
       setInput("");
       setLoading(true);
       setActivePanel("chat");
 
-      // Create abort controller for this stream
       const controller = new AbortController();
       abortRef.current = controller;
 
       try {
-        const toolId = activeTool;
         await callClaudeStream(
           updated,
           toolId,
@@ -138,7 +157,6 @@ export default function App() {
           controller.signal
         );
 
-        // Mark streaming complete
         setConversations((prev) => {
           const convo = [...prev[toolId]];
           const last = convo[convo.length - 1];
@@ -147,15 +165,13 @@ export default function App() {
         });
       } catch (e) {
         if (e.name === "AbortError") return;
-        const toolId = activeTool;
         setConversations((prev) => {
           const convo = [...prev[toolId]];
           const last = convo[convo.length - 1];
-          // If we got partial content, preserve it and append error
           const partial = last.content;
           const errorMsg = partial
-            ? `${partial}\n\n\u26A0\uFE0F Stream interrupted: ${e.message}`
-            : `\u26A0\uFE0F Error: ${e.message}`;
+            ? `${partial}\n\n${ERROR_PREFIX} Stream interrupted: ${e.message}`
+            : `${ERROR_PREFIX} Error: ${e.message}`;
           convo[convo.length - 1] = { role: "assistant", content: errorMsg, streaming: false };
           return { ...prev, [toolId]: convo };
         });
@@ -165,27 +181,25 @@ export default function App() {
         inputRef.current?.focus();
       }
     },
-    [activeTool, conversations, loading, setConversations]
+    [activeTool, loading, setConversations]
   );
 
   const retryLast = useCallback(() => {
-    const convo = conversations[activeTool];
-    if (convo.length < 2) return;
-    const userMsg = convo[convo.length - 2];
-    if (userMsg.role !== "user") return;
-    const textToRetry = userMsg.content;
-
-    setConversations((prev) => ({
-      ...prev,
-      [activeTool]: prev[activeTool].slice(0, -1),
-    }));
-    requestAnimationFrame(() => sendMessage(textToRetry));
-  }, [activeTool, conversations, setConversations, sendMessage]);
+    let textToRetry;
+    setConversations((prev) => {
+      const convo = prev[activeTool];
+      if (convo.length < 2) return prev;
+      const userMsg = convo[convo.length - 2];
+      if (userMsg.role !== "user") return prev;
+      textToRetry = userMsg.content;
+      return { ...prev, [activeTool]: convo.slice(0, -1) };
+    });
+    if (textToRetry) requestAnimationFrame(() => sendMessage(textToRetry));
+  }, [activeTool, setConversations, sendMessage]);
 
   const handleSave = useCallback(
     (content) => {
-      const t = TOOLS.find((t) => t.id === activeTool);
-      saveResponse(content, activeTool, t?.label);
+      saveResponse(content, activeTool, TOOL_MAP[activeTool]?.label);
       showToast("\u2713 Response saved", "#5BC98A");
     },
     [activeTool, saveResponse, showToast]
@@ -207,7 +221,10 @@ export default function App() {
     [deleteResponse, showToast]
   );
 
-  const filteredTemplates = templateFilter === "all" ? TEMPLATE_LIBRARY : TEMPLATE_LIBRARY.filter((t) => t.category === templateFilter);
+  const filteredTemplates = useMemo(
+    () => templateFilter === "all" ? TEMPLATE_LIBRARY : TEMPLATE_LIBRARY.filter((t) => t.category === templateFilter),
+    [templateFilter]
+  );
 
   return (
     <div
@@ -221,26 +238,7 @@ export default function App() {
         overflow: "hidden",
       }}
     >
-      <style>{`
-        @keyframes fadeIn { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:translateY(0) } }
-        @keyframes spin { to { transform:rotate(360deg) } }
-        @keyframes toastIn { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
-        @keyframes blink { 50% { opacity:0 } }
-        * { box-sizing: border-box; }
-        ::-webkit-scrollbar { width:5px } ::-webkit-scrollbar-thumb { background:rgba(91,155,213,0.25); border-radius:3px }
-        .tab-btn:hover { background: rgba(255,255,255,0.06) !important; }
-        .panel-btn:hover { opacity: 0.85; }
-        .qbtn:hover { background: rgba(44,95,138,0.25) !important; border-color: rgba(91,155,213,0.4) !important; }
-        .tbtn:hover { background: rgba(44,95,138,0.2) !important; }
-        .send:hover:not(:disabled) { filter: brightness(1.15); transform: translateY(-1px); }
-        textarea { caret-color: #5B9BD5; }
-        textarea:focus { outline: none; box-shadow: 0 0 0 1px rgba(91,155,213,0.3); border-radius: 4px; }
-        .saved-card:hover { background: rgba(255,255,255,0.05) !important; }
-        @media (max-width: 600px) {
-          .tab-btn { padding: 6px 10px !important; font-size: 12px !important; }
-          .tab-label { display: none; }
-        }
-      `}</style>
+      <style>{GLOBAL_STYLES}</style>
 
       {/* ── HEADER ── */}
       <header
@@ -358,26 +356,25 @@ export default function App() {
             </button>
           );
         })}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-          <button
-            className="tab-btn"
-            onClick={() => setActivePanel((p) => (p === "templates" ? "chat" : "templates"))}
-            style={{
-              padding: "8px 14px",
-              borderRadius: "8px 8px 0 0",
-              border: "1px solid transparent",
-              borderBottom: activePanel === "templates" ? "2px solid #E8AA5A" : "2px solid transparent",
-              background: activePanel === "templates" ? "rgba(130,90,30,0.2)" : "transparent",
-              color: activePanel === "templates" ? "#EAF2FB" : "#3D6080",
-              cursor: "pointer",
-              fontSize: 12,
-              fontFamily: "system-ui",
-              transition: "all 0.2s",
-            }}
-          >
-            {"\uD83D\uDCDA"} Templates
-          </button>
-        </div>
+        <button
+          className="tab-btn"
+          onClick={() => setActivePanel((p) => (p === "templates" ? "chat" : "templates"))}
+          style={{
+            marginLeft: "auto",
+            padding: "8px 14px",
+            borderRadius: "8px 8px 0 0",
+            border: "1px solid transparent",
+            borderBottom: activePanel === "templates" ? "2px solid #E8AA5A" : "2px solid transparent",
+            background: activePanel === "templates" ? "rgba(130,90,30,0.2)" : "transparent",
+            color: activePanel === "templates" ? "#EAF2FB" : "#3D6080",
+            cursor: "pointer",
+            fontSize: 12,
+            fontFamily: "system-ui",
+            transition: "all 0.2s",
+          }}
+        >
+          {"\uD83D\uDCDA"} Templates
+        </button>
       </nav>
 
       {/* ── MAIN CONTENT ── */}
@@ -445,7 +442,7 @@ export default function App() {
                     }}
                   >
                     <span style={{ fontSize: 10, color, fontFamily: "system-ui", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 8 }}>
-                      {TOOLS.find((t) => t.id === tmpl.category)?.icon} {tmpl.category}
+                      {TOOL_MAP[tmpl.category]?.icon} {tmpl.category}
                     </span>
                     <div style={{ fontSize: 14, color: "#C8DCF0", fontWeight: 600, marginBottom: 6 }}>{tmpl.label}</div>
                     <div style={{ fontSize: 12, color: "#4A6880", lineHeight: 1.6, fontFamily: "system-ui" }}>{tmpl.prompt.slice(0, 90)}{"\u2026"}</div>
@@ -506,7 +503,7 @@ export default function App() {
                             marginRight: 8,
                           }}
                         >
-                          {TOOLS.find((t) => t.id === r.tool)?.icon} {r.toolLabel}
+                          {TOOL_MAP[r.tool]?.icon} {r.toolLabel}
                         </span>
                         <span style={{ fontSize: 11, color: "#2E4A60", fontFamily: "system-ui" }}>{r.savedAt}</span>
                       </div>
@@ -641,8 +638,7 @@ export default function App() {
                       onExport={() => exportToPDF(`${tool.label} \u2014 ${new Date().toLocaleDateString()}`, msg.content)}
                       onCopy={() => handleCopy(msg.content)}
                       onRetry={
-                        // Only offer retry on the last message if it's an error
-                        i === currentConvo.length - 1 && msg.role === "assistant" && msg.content.startsWith("\u26A0")
+                        i === currentConvo.length - 1 && msg.role === "assistant" && msg.content.startsWith(ERROR_PREFIX)
                           ? retryLast
                           : undefined
                       }

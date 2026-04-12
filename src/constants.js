@@ -1,9 +1,13 @@
+export const ERROR_PREFIX = "\u26A0\uFE0F";
+
 export const TOOLS = [
   { id: "policy", label: "Policy", icon: "📋", desc: "Policies & procedures" },
   { id: "supervision", label: "Supervision", icon: "🩺", desc: "NP/PA oversight tools" },
   { id: "lecture", label: "Lecture", icon: "🎓", desc: "CME content builder" },
   { id: "chat", label: "Consult", icon: "💬", desc: "Clinical consultation" },
 ];
+
+export const TOOL_MAP = Object.fromEntries(TOOLS.map((t) => [t.id, t]));
 
 export const TOOL_COLORS = {
   policy: "#5B9BD5",

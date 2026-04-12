@@ -1,7 +1,6 @@
-/**
- * Calls the backend proxy which forwards to Claude API.
- * API key is stored server-side only — never exposed to the browser.
- */
+// API key is stored server-side only — never exposed to the browser.
+
+const DEFAULT_MAX_TOKENS = 4096;
 
 function throwResponseError(res, data) {
   if (res.status === 429) throw new Error("Rate limited. Please wait a moment before sending another message.");
@@ -15,7 +14,7 @@ export async function callClaude(messages, tool) {
     res = await fetch("/api/claude", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, tool, maxTokens: 4096 }),
+      body: JSON.stringify({ messages, tool, maxTokens: DEFAULT_MAX_TOKENS }),
     });
   } catch {
     throw new Error("Can't reach server. Check your connection.");
@@ -26,18 +25,13 @@ export async function callClaude(messages, tool) {
   return data.text;
 }
 
-/**
- * Streaming version — calls SSE endpoint, invokes onChunk for each text delta.
- * Returns a promise that resolves when streaming is complete.
- * Pass an AbortSignal to cancel mid-stream.
- */
 export async function callClaudeStream(messages, tool, onChunk, signal) {
   let res;
   try {
     res = await fetch("/api/claude/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, tool, maxTokens: 4096 }),
+      body: JSON.stringify({ messages, tool, maxTokens: DEFAULT_MAX_TOKENS }),
       signal,
     });
   } catch (err) {

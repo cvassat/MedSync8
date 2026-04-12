@@ -26,6 +26,7 @@ const SYSTEM_PROMPTS = {
 };
 
 const VALID_TOOLS = new Set(Object.keys(SYSTEM_PROMPTS));
+const VALID_TOOLS_LIST = [...VALID_TOOLS].join(", ");
 
 // ── Anthropic Client ────────────────────────────────────────────────────────
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -35,7 +36,7 @@ function validateRequest(body) {
   const { messages, tool, maxTokens } = body;
 
   if (!tool || !VALID_TOOLS.has(tool)) {
-    return { error: `Invalid tool. Must be one of: ${[...VALID_TOOLS].join(", ")}`, status: 400 };
+    return { error: `Invalid tool. Must be one of: ${VALID_TOOLS_LIST}`, status: 400 };
   }
   if (!Array.isArray(messages) || messages.length === 0) {
     return { error: "Messages must be a non-empty array.", status: 400 };
@@ -108,7 +109,6 @@ app.post("/api/claude/stream", apiLimiter, async (req, res) => {
       messages: sanitizedMessages,
     });
 
-    // Abort if client disconnects
     req.on("close", () => {
       aborted = true;
       stream.abort();

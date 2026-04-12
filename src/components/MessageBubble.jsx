@@ -1,6 +1,7 @@
 import React, { useState } from "react";
+import { ERROR_PREFIX } from "../constants.js";
 
-const isErrorMessage = (content) => content.startsWith("\u26A0");
+const isErrorMessage = (content) => content.startsWith(ERROR_PREFIX);
 
 export default React.memo(function MessageBubble({ role, content, streaming, onSave, onExport, onCopy, onRetry }) {
   const isUser = role === "user";

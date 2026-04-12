@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
+import { TOOLS } from "../constants.js";
 
 const STORAGE_KEY = "psychiatry-workbench-conversations";
-const EMPTY = { policy: [], supervision: [], lecture: [], chat: [] };
+const EMPTY = Object.fromEntries(TOOLS.map((t) => [t.id, []]));
 
 function loadFromStorage() {
   try {
