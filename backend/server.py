@@ -17,11 +17,12 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from .auth import require_access
+from .embedders import build_embedder_from_env
 from .prompts import SYSTEM_PROMPTS, VALID_TOOLS
 from .retriever import Retriever, format_context
 
@@ -44,13 +45,16 @@ ALLOWED_ORIGINS = os.environ.get(
 async def lifespan(app: FastAPI):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log.warning("ANTHROPIC_API_KEY not set — /api/chat will fail")
-    if not os.environ.get("OPENAI_API_KEY"):
-        log.warning("OPENAI_API_KEY not set — retrieval disabled")
+
+    embedder = build_embedder_from_env()
+    if embedder is None:
+        log.warning("no embedder available — retrieval disabled")
         app.state.retriever = None
     else:
-        retriever = Retriever(CORPUS_DIR, OpenAI())
+        retriever = Retriever(CORPUS_DIR, embedder)
         retriever.load_or_build()
         app.state.retriever = retriever
+
     app.state.anthropic = anthropic.Anthropic()
     yield
 
@@ -102,11 +106,13 @@ def health() -> dict:
         "model": ANTHROPIC_MODEL,
         "rag_enabled": bool(retriever and retriever.ready()),
         "corpus_chunks": len(retriever.chunks) if retriever and retriever.ready() else 0,
+        "embedder": retriever.embedder.name if retriever and retriever.ready() else None,
+        "access_enforced": bool(os.environ.get("CF_ACCESS_AUD")),
     }
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatResponse:
     if req.tool not in VALID_TOOLS:
         raise HTTPException(400, f"unknown tool: {req.tool}")
 
