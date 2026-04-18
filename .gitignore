@@ -24,3 +24,13 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# RAG backend
+backend/.venv/
+corpus/index.json
+corpus/*.pdf
+corpus/*.txt
+corpus/*.md
+!corpus/README.md
+.env
+frontend/.env
