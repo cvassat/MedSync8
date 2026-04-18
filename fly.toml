@@ -22,11 +22,14 @@ primary_region = "ord"  # Chicago — matches user timezone, change if needed
   # third-party data handling). "openai" uses the OpenAI embeddings API.
   EMBED_BACKEND = "local"
   LOCAL_EMBED_MODEL = "sentence-transformers/bge-small-en-v1.5"
+  # Audit log is written to the persistent volume so it survives deploys.
+  AUDIT_LOG_PATH = "/data/audit.log"
   # Set ALLOWED_ORIGINS to your deployed frontend URL(s) before going live.
   ALLOWED_ORIGINS = "http://localhost:5173"
-  # Cloudflare Access (set via `fly secrets set` in production):
+  # Set these via `fly secrets set` in production (never commit them):
   #   CF_ACCESS_TEAM_DOMAIN  (e.g. "acme" for acme.cloudflareaccess.com)
   #   CF_ACCESS_AUD          (Application AUD tag from the Access dashboard)
+  #   AUDIT_SALT             (random hex; rotate to unlink old query hashes)
 
 [http_service]
   internal_port = 8080

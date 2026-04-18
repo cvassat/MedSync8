@@ -6,12 +6,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend import audit as audit_module
 from backend import server as server_module
 from backend.retriever import Retriever
 
 
 @pytest.fixture
-def client(monkeypatch, tiny_corpus: Path, stub_embedder, stub_anthropic):
+def client(monkeypatch, tmp_path: Path, tiny_corpus: Path, stub_embedder, stub_anthropic):
     # Build a retriever against the tiny corpus and inject it, skipping lifespan.
     retriever = Retriever(str(tiny_corpus), stub_embedder)
     retriever.load_or_build()
@@ -20,6 +21,9 @@ def client(monkeypatch, tiny_corpus: Path, stub_embedder, stub_anthropic):
     monkeypatch.setattr(server_module.app.router, "lifespan_context", None)
     server_module.app.state.retriever = retriever
     server_module.app.state.anthropic = stub_anthropic
+
+    # Route audit writes to a temp file so each test gets a clean logger.
+    audit_module.reset_for_tests(tmp_path / "audit.log")
 
     return TestClient(server_module.app)
 
@@ -73,3 +77,29 @@ def test_chat_rejects_unknown_tool(client):
 def test_chat_requires_at_least_one_message(client):
     r = client.post("/api/chat", json={"tool": "chat", "messages": []})
     assert r.status_code == 422
+
+
+def test_chat_writes_audit_event_without_query_text(client):
+    leaky = "UNIQUE-PATIENT-STRING-xyz123"
+    r = client.post("/api/chat", json={
+        "tool": "policy",
+        "messages": [{"role": "user", "content": leaky}],
+        "use_rag": False,
+    })
+    assert r.status_code == 200
+
+    # /api/audit/recent reflects the request.
+    r2 = client.get("/api/audit/recent")
+    assert r2.status_code == 200
+    body = r2.json()
+    assert body["count"] == 1
+    event = body["events"][0]
+    assert event["event"] == "chat"
+    assert event["tool"] == "policy"
+    assert event["status"] == "ok"
+    assert event["query_len"] == len(leaky)
+
+    # Neither the endpoint response nor the persisted file contains the raw query.
+    assert leaky not in r2.text
+    log_path = audit_module.get_logger().path
+    assert leaky not in log_path.read_text(encoding="utf-8")

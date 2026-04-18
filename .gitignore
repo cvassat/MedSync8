@@ -34,3 +34,7 @@ corpus/*.md
 !corpus/README.md
 .env
 frontend/.env
+
+# Audit logs (written at runtime; ship off-box via Logpush)
+audit.log
+*.audit.log

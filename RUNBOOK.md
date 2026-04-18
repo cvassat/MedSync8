@@ -14,7 +14,10 @@ Operational manual for the RAG-backed telepsychiatry workbench
 > 4. Cloudflare Access (or equivalent SSO) gating `/api/chat` — see
 >    "Cloudflare Access" below. **Implemented in code**; still needs to be
 >    turned on in the Cloudflare dashboard per environment.
-> 5. Audit logging enabled (still TODO — see hardening checklist).
+> 5. Audit logging enabled (**implemented** — see "Audit log" below) and
+>    shipped to long-term retention storage (6+ years — still TODO).
+>    The backend writes hash-only events; no raw queries or replies are
+>    persisted.
 >
 > Until then, this tool is for **general regulatory drafting with public regs
 > in the corpus** — not patient-level clinical work.
@@ -293,6 +296,73 @@ VITE_API_BASE=http://localhost:8000 npm run dev
 
 ---
 
+## Audit log
+
+Every `/api/chat` request produces one JSON line in `/data/audit.log`
+(configurable via `AUDIT_LOG_PATH`) with:
+
+```json
+{
+  "ts": "2026-04-18T20:41:12.193+00:00",
+  "event": "chat",
+  "user": "clinician@nehpsychiatry.com",
+  "tool": "policy",
+  "query_hash": "a3f19c2d8e0b4716",
+  "query_len": 142,
+  "reply_len": 1834,
+  "citations": 3,
+  "top_doc": "dea_ryan_haight.md",
+  "latency_ms": 1124,
+  "status": "ok"
+}
+```
+
+**What is NOT in the log:** the raw user message, the model's reply, any
+exception message. Only metadata and a salted SHA-256 truncated to 16 hex
+chars. Rotating `AUDIT_SALT` makes old hashes unlinkable to new ones.
+
+### Recent events endpoint
+
+`GET /api/audit/recent?limit=50` returns the in-memory tail (last 200
+events) as JSON. Gated by Cloudflare Access — restrict with a dedicated
+Access policy (e.g. `admin@nehpsychiatry.com` only) if you want to
+separate admins from clinicians.
+
+### Long-term retention (6+ years)
+
+`/data/audit.log` persists across deploys because it lives on the
+`corpus_data` volume. For HIPAA retention, pipe it off-box. Options:
+
+- **Cloudflare Logpush** if you front the app with Cloudflare (simplest).
+- **Fly log shipper** to Datadog / S3 / Loki (`fly.toml` + a shipper).
+- **Cron job** that rsyncs `/data/audit.log` to a BAA-covered S3 bucket
+  daily, then truncates locally.
+
+Until one of these is wired, the log is only as durable as the Fly
+volume. Don't rely on it for compliance.
+
+---
+
+## One-command setup
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export CF_ACCESS_TEAM_DOMAIN=nehpsychiatry.cloudflareaccess.com
+export CF_ACCESS_AUD=<aud-tag-from-cf-dashboard>
+export ALLOWED_ORIGINS=https://medsync8-telepsych.pages.dev
+export AUDIT_SALT="$(openssl rand -hex 32)"
+
+bash scripts/setup_prod.sh
+```
+
+This idempotent script creates the Fly app + volume if missing, stages
+all secrets, deploys, and verifies `/api/health` reports
+`access_enforced: true`. Safe to re-run. It does NOT create the
+Cloudflare Access application or the Pages project — do those in the
+dashboard once, following the steps in the two sections above.
+
+---
+
 ## HIPAA hardening checklist (before PHI traffic)
 
 - [ ] Anthropic enterprise BAA signed, Zero Data Retention enabled.
@@ -303,8 +373,10 @@ VITE_API_BASE=http://localhost:8000 npm run dev
 - [x] **SSO gating wired in code (Cloudflare Access JWT verification on
       `/api/chat`).** Remaining: create the Cloudflare Access application and
       set `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` secrets per environment.
-- [ ] Request/response audit log with user identity (`cf-access-authenticated-user-email`
-      header), timestamp, tool, and hash of query (not content) persisted 6+ years.
+- [x] **Hash-only audit log (`backend/audit.py`) records timestamp, user
+      identity from the Access JWT, tool, salted query hash, lengths, and
+      latency.** No raw content stored. Remaining: ship `/data/audit.log`
+      to a 6+ year retention target (Logpush → S3, Datadog Archive, etc.).
 - [ ] Breach-notification plan documented.
 - [ ] Minimum-necessary: strip session history older than N days.
 - [ ] Corpus volume encrypted at rest (Fly volumes are encrypted by default;
