@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .audit import ChatAuditContext, get_logger as get_audit_logger
 from .auth import require_access
 from .embedders import build_embedder_from_env
 from .prompts import SYSTEM_PROMPTS, VALID_TOOLS
@@ -120,36 +121,56 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
     retriever: Retriever | None = app.state.retriever
     citations: list[Citation] = []
 
-    if req.use_rag and retriever and retriever.ready():
-        # Use the latest user message as the retrieval query.
-        last_user = next(
-            (m.content for m in reversed(req.messages) if m.role == "user"), ""
-        )
-        hits = retriever.search(last_user, k=TOP_K)
-        if hits:
-            system_prompt = (
-                f"{system_prompt}\n\n"
-                "=== RETRIEVED CONTEXT ===\n"
-                f"{format_context(hits)}\n"
-                "=== END CONTEXT ===\n"
-                "Use the context above when relevant. If the user's question "
-                "cannot be answered from the context, say so and answer from "
-                "general expertise, but do NOT fabricate citations."
+    # Grab the last user message once -- used for retrieval and audit hash.
+    last_user = next(
+        (m.content for m in reversed(req.messages) if m.role == "user"), ""
+    )
+
+    with ChatAuditContext(tool=req.tool, user_query=last_user, claims=claims) as audit:
+        if req.use_rag and retriever and retriever.ready() and last_user:
+            hits = retriever.search(last_user, k=TOP_K)
+            if hits:
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    "=== RETRIEVED CONTEXT ===\n"
+                    f"{format_context(hits)}\n"
+                    "=== END CONTEXT ===\n"
+                    "Use the context above when relevant. If the user's question "
+                    "cannot be answered from the context, say so and answer from "
+                    "general expertise, but do NOT fabricate citations."
+                )
+                citations = [
+                    Citation(index=i + 1, doc_id=h.doc_id, chunk_id=h.chunk_id, score=h.score)
+                    for i, h in enumerate(hits)
+                ]
+
+        try:
+            resp = app.state.anthropic.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system_prompt,
+                messages=[m.model_dump() for m in req.messages],
             )
-            citations = [
-                Citation(index=i + 1, doc_id=h.doc_id, chunk_id=h.chunk_id, score=h.score)
-                for i, h in enumerate(hits)
-            ]
+        except anthropic.APIError as e:
+            raise HTTPException(502, f"anthropic error: {e}") from e
 
-    try:
-        resp = app.state.anthropic.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            messages=[m.model_dump() for m in req.messages],
-        )
-    except anthropic.APIError as e:
-        raise HTTPException(502, f"anthropic error: {e}") from e
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        audit.set_result(reply_len=len(text), citations=citations)
 
-    text = next((b.text for b in resp.content if b.type == "text"), "")
     return ChatResponse(reply=text, citations=citations, model=ANTHROPIC_MODEL)
+
+
+@app.get("/api/audit/recent")
+def audit_recent(
+    limit: int = 50,
+    claims: dict = Depends(require_access),
+) -> dict:
+    """Return the last N audit events (metadata only -- no query text).
+
+    Gated by the same Cloudflare Access dependency as /api/chat. Restrict
+    further with an Access policy (e.g. admin group) on the CF side if
+    needed -- this endpoint does not do role checks itself.
+    """
+    limit = max(1, min(limit, 200))
+    events = get_audit_logger().recent(limit=limit)
+    return {"count": len(events), "events": events}
