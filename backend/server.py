@@ -1,0 +1,149 @@
+"""FastAPI backend for the MedSync8 telepsychiatry assistant.
+
+Responsibilities:
+  * Hide the Anthropic API key server-side.
+  * Retrieve relevant context from a local corpus (RAG).
+  * Forward the augmented prompt to Claude and return citations.
+
+Run:
+  uvicorn backend.server:app --reload --port 8000
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import Literal
+
+import anthropic
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+from .prompts import SYSTEM_PROMPTS, VALID_TOOLS
+from .retriever import Retriever, format_context
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("medsync8")
+
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
+MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4096"))
+CORPUS_DIR = os.environ.get("CORPUS_DIR", "./corpus")
+TOP_K = int(os.environ.get("RAG_TOP_K", "4"))
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
+).split(",")
+
+
+# ---------- lifecycle -------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        log.warning("ANTHROPIC_API_KEY not set — /api/chat will fail")
+    if not os.environ.get("OPENAI_API_KEY"):
+        log.warning("OPENAI_API_KEY not set — retrieval disabled")
+        app.state.retriever = None
+    else:
+        retriever = Retriever(CORPUS_DIR, OpenAI())
+        retriever.load_or_build()
+        app.state.retriever = retriever
+    app.state.anthropic = anthropic.Anthropic()
+    yield
+
+
+app = FastAPI(title="MedSync8 Telepsychiatry Backend", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in ALLOWED_ORIGINS if o.strip()],
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type"],
+)
+
+
+# ---------- schemas ---------------------------------------------------------
+
+
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    tool: Literal["policy", "supervision", "lecture", "chat"]
+    messages: list[Message] = Field(..., min_length=1)
+    use_rag: bool = True
+
+
+class Citation(BaseModel):
+    index: int
+    doc_id: str
+    chunk_id: int
+    score: float
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    citations: list[Citation]
+    model: str
+
+
+# ---------- routes ----------------------------------------------------------
+
+
+@app.get("/api/health")
+def health() -> dict:
+    retriever = app.state.retriever
+    return {
+        "ok": True,
+        "model": ANTHROPIC_MODEL,
+        "rag_enabled": bool(retriever and retriever.ready()),
+        "corpus_chunks": len(retriever.chunks) if retriever and retriever.ready() else 0,
+    }
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(req: ChatRequest) -> ChatResponse:
+    if req.tool not in VALID_TOOLS:
+        raise HTTPException(400, f"unknown tool: {req.tool}")
+
+    system_prompt = SYSTEM_PROMPTS[req.tool]
+    retriever: Retriever | None = app.state.retriever
+    citations: list[Citation] = []
+
+    if req.use_rag and retriever and retriever.ready():
+        # Use the latest user message as the retrieval query.
+        last_user = next(
+            (m.content for m in reversed(req.messages) if m.role == "user"), ""
+        )
+        hits = retriever.search(last_user, k=TOP_K)
+        if hits:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                "=== RETRIEVED CONTEXT ===\n"
+                f"{format_context(hits)}\n"
+                "=== END CONTEXT ===\n"
+                "Use the context above when relevant. If the user's question "
+                "cannot be answered from the context, say so and answer from "
+                "general expertise, but do NOT fabricate citations."
+            )
+            citations = [
+                Citation(index=i + 1, doc_id=h.doc_id, chunk_id=h.chunk_id, score=h.score)
+                for i, h in enumerate(hits)
+            ]
+
+    try:
+        resp = app.state.anthropic.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=MAX_TOKENS,
+            system=system_prompt,
+            messages=[m.model_dump() for m in req.messages],
+        )
+    except anthropic.APIError as e:
+        raise HTTPException(502, f"anthropic error: {e}") from e
+
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    return ChatResponse(reply=text, citations=citations, model=ANTHROPIC_MODEL)
