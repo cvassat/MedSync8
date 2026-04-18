@@ -19,20 +19,22 @@ class _EmbeddingsResponse:
         self.data = data
 
 
-class StubOpenAI:
-    """Deterministic, hash-seeded embeddings so identical text -> identical vector."""
+class StubEmbedder:
+    """Deterministic, hash-seeded embedder used by the retriever in tests.
 
-    class _Embeddings:
-        def create(self, model: str, input: list[str]) -> _EmbeddingsResponse:
-            out: list[_Embedding] = []
-            for text in input:
-                seed = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
-                rng = np.random.default_rng(seed)
-                out.append(_Embedding(rng.standard_normal(16).tolist()))
-            return _EmbeddingsResponse(out)
+    Implements the ``Embedder`` protocol from ``backend.embedders`` — no
+    third-party network, no model downloads.
+    """
 
-    def __init__(self) -> None:
-        self.embeddings = self._Embeddings()
+    name = "stub:test"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for text in texts:
+            seed = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
+            rng = np.random.default_rng(seed)
+            out.append(rng.standard_normal(16).tolist())
+        return out
 
 
 class _AnthropicContentBlock:
@@ -68,8 +70,8 @@ class StubAnthropic:
 
 
 @pytest.fixture
-def stub_openai() -> StubOpenAI:
-    return StubOpenAI()
+def stub_embedder() -> StubEmbedder:
+    return StubEmbedder()
 
 
 @pytest.fixture

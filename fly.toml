@@ -18,8 +18,15 @@ primary_region = "ord"  # Chicago — matches user timezone, change if needed
   CORPUS_DIR = "/data/corpus"
   RAG_TOP_K = "4"
   ANTHROPIC_MODEL = "claude-opus-4-6"
+  # Embedding backend. "local" runs sentence-transformers in-process (no
+  # third-party data handling). "openai" uses the OpenAI embeddings API.
+  EMBED_BACKEND = "local"
+  LOCAL_EMBED_MODEL = "sentence-transformers/bge-small-en-v1.5"
   # Set ALLOWED_ORIGINS to your deployed frontend URL(s) before going live.
   ALLOWED_ORIGINS = "http://localhost:5173"
+  # Cloudflare Access (set via `fly secrets set` in production):
+  #   CF_ACCESS_TEAM_DOMAIN  (e.g. "acme" for acme.cloudflareaccess.com)
+  #   CF_ACCESS_AUD          (Application AUD tag from the Access dashboard)
 
 [http_service]
   internal_port = 8080
@@ -37,9 +44,11 @@ primary_region = "ord"  # Chicago — matches user timezone, change if needed
     timeout = "5s"
 
 [[vm]]
+  # Local embeddings need more RAM than the OpenAI path. bge-small uses
+  # ~400MB resident; 1GB gives comfortable headroom.
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 512
+  memory_mb = 1024
 
 [mounts]
   source = "corpus_data"

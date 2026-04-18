@@ -1,10 +1,11 @@
 """Simple on-disk retriever over a `corpus/` folder.
 
-Design goals: zero external services, easy to understand, fast enough for
-hundreds of policy docs. Uses OpenAI embeddings + cosine similarity, cached
-to a single JSON file so cold-start is cheap after the first indexing run.
+Design goals: zero required external services, easy to understand, fast
+enough for hundreds of policy docs. Uses a pluggable embedder (see
+``backend.embedders``) + cosine similarity, cached to a single JSON file so
+cold-start is cheap after the first indexing run.
 
-For 10k+ docs, swap `_cosine_topk` for FAISS or move to pgvector.
+For 10k+ docs, swap ``_cosine_topk`` for FAISS or move to pgvector.
 """
 
 from __future__ import annotations
@@ -20,9 +21,10 @@ from typing import Iterable
 
 import numpy as np
 
+from .embedders import Embedder
+
 log = logging.getLogger(__name__)
 
-EMBED_MODEL = "text-embedding-3-small"     # 1536 dims, cheap
 CHUNK_CHARS = 1200
 CHUNK_OVERLAP = 200
 INDEX_FILE = "index.json"
@@ -89,9 +91,9 @@ def _sha(text: str) -> str:
 
 
 class Retriever:
-    def __init__(self, corpus_dir: str, openai_client) -> None:
+    def __init__(self, corpus_dir: str, embedder: Embedder) -> None:
         self.corpus_dir = Path(corpus_dir)
-        self.client = openai_client
+        self.embedder = embedder
         self.index_path = self.corpus_dir / INDEX_FILE
         self.chunks: list[Chunk] = []
         self.vectors: np.ndarray | None = None
@@ -112,6 +114,15 @@ class Retriever:
             return
 
         cache = self._load_cache()
+        # Only reuse cache if it was built with the same embedder — mixing
+        # vectors from different models gives garbage scores.
+        cache_embedder = cache.get("embedder")
+        if cache_embedder and cache_embedder != self.embedder.name:
+            log.info(
+                "embedder changed (%s -> %s); rebuilding index",
+                cache_embedder, self.embedder.name,
+            )
+            cache = {}
         cached_by_sha = {(c["sha"]): c for c in cache.get("chunks", [])}
 
         # Reuse embeddings for unchanged chunks, embed the rest.
@@ -126,8 +137,9 @@ class Retriever:
                 vectors.append(None)  # placeholder  # type: ignore[arg-type]
 
         if to_embed:
-            log.info("embedding %d new/changed chunks", len(to_embed))
-            new_vecs = self._embed_batch([c.text for c in to_embed])
+            log.info("embedding %d new/changed chunks via %s",
+                     len(to_embed), self.embedder.name)
+            new_vecs = self.embedder.embed([c.text for c in to_embed])
             j = 0
             for idx, v in enumerate(vectors):
                 if v is None:
@@ -143,7 +155,7 @@ class Retriever:
     def search(self, query: str, k: int = 4) -> list[Hit]:
         if not self.ready():
             return []
-        qv = np.array(self._embed_batch([query])[0], dtype=np.float32)
+        qv = np.array(self.embedder.embed([query])[0], dtype=np.float32)
         return self._cosine_topk(qv, k)
 
     # ----- internals -----
@@ -161,15 +173,6 @@ class Retriever:
                 out.append(Chunk(doc_id=rel, chunk_id=i, text=chunk_text, sha=_sha(chunk_text)))
         return out
 
-    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        # OpenAI supports up to 2048 inputs per call; batch modestly.
-        result: list[list[float]] = []
-        for i in range(0, len(texts), 64):
-            batch = texts[i : i + 64]
-            resp = self.client.embeddings.create(model=EMBED_MODEL, input=batch)
-            result.extend(d.embedding for d in resp.data)
-        return result
-
     def _load_cache(self) -> dict:
         if not self.index_path.exists():
             return {}
@@ -180,7 +183,7 @@ class Retriever:
 
     def _save_cache(self) -> None:
         payload = {
-            "model": EMBED_MODEL,
+            "embedder": self.embedder.name,
             "chunks": [
                 {
                     "doc_id": c.doc_id,

@@ -11,9 +11,9 @@ from backend.retriever import Retriever
 
 
 @pytest.fixture
-def client(monkeypatch, tiny_corpus: Path, stub_openai, stub_anthropic):
+def client(monkeypatch, tiny_corpus: Path, stub_embedder, stub_anthropic):
     # Build a retriever against the tiny corpus and inject it, skipping lifespan.
-    retriever = Retriever(str(tiny_corpus), stub_openai)
+    retriever = Retriever(str(tiny_corpus), stub_embedder)
     retriever.load_or_build()
 
     # Skip the real lifespan (which needs ANTHROPIC_API_KEY env vars).

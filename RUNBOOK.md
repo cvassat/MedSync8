@@ -8,10 +8,13 @@ Operational manual for the RAG-backed telepsychiatry workbench
 > PHI into the chat until all of these are true:
 >
 > 1. Anthropic BAA in place (enterprise / ZDR tier).
-> 2. OpenAI BAA in place, **or** embeddings swapped to a local model (see
->    "HIPAA hardening" below).
+> 2. Embeddings running on the **local** backend (default — no third-party
+>    embedding call), **or** an OpenAI BAA if you swap `EMBED_BACKEND=openai`.
 > 3. Hosting BAA in place (AWS + BAA, Azure + BAA, or Fly.io Enterprise w/ BAA).
-> 4. Access controls + audit logging enabled.
+> 4. Cloudflare Access (or equivalent SSO) gating `/api/chat` — see
+>    "Cloudflare Access" below. **Implemented in code**; still needs to be
+>    turned on in the Cloudflare dashboard per environment.
+> 5. Audit logging enabled (still TODO — see hardening checklist).
 >
 > Until then, this tool is for **general regulatory drafting with public regs
 > in the corpus** — not patient-level clinical work.
@@ -28,11 +31,17 @@ FastAPI backend (backend/server.py)
   │
   ├──► Retriever (backend/retriever.py)
   │     ├─ reads corpus/ (MD/TXT/PDF)
-  │     ├─ OpenAI text-embedding-3-small
-  │     └─ cosine top-k, cached in corpus/index.json
+  │     ├─ Embedder (local bge-small default, OpenAI optional)
+  │     └─ cosine top-k, cached in corpus/index.json (keyed by embedder name)
+  │
+  ├──► Cloudflare Access JWT verification (backend/auth.py)
+  │     └─ enforced when CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set
   │
   └──► Anthropic Messages API (claude-opus-4-6)
            using role-specific system prompt + retrieved context
+
+Frontend is a Vite/React SPA deployed to Cloudflare Pages, fronted by the
+same Cloudflare Access application so both the UI and /api/chat require SSO.
 ```
 
 ---
@@ -50,19 +59,40 @@ fly volumes create corpus_data --region ord --size 1
 
 fly secrets set \
   ANTHROPIC_API_KEY=sk-ant-... \
-  OPENAI_API_KEY=sk-... \
-  ALLOWED_ORIGINS=https://your-frontend.example.com
+  ALLOWED_ORIGINS=https://medsync8-telepsych.pages.dev \
+  CF_ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com \
+  CF_ACCESS_AUD=<application-aud-tag-from-cloudflare>
+
+# Only needed if EMBED_BACKEND=openai (default is local; no OpenAI call)
+# fly secrets set OPENAI_API_KEY=sk-...
 
 fly deploy
 fly open      # opens the /api/health page
 ```
 
+The image is ~1GB larger than the pre-phi-ready build because the
+`sentence-transformers/bge-small-en-v1.5` weights are prefetched at build
+time into `/opt/hfcache`. The Fly machine therefore needs **1 GB RAM**
+(`fly.toml` now sets `memory = 1024`).
+
 Expected health response after first boot (corpus will be empty until you sync
 files to the volume — see next section):
 
 ```json
-{"ok":true,"model":"claude-opus-4-6","rag_enabled":false,"corpus_chunks":0}
+{
+  "ok": true,
+  "model": "claude-opus-4-6",
+  "rag_enabled": false,
+  "corpus_chunks": 0,
+  "embedder": "local:sentence-transformers/bge-small-en-v1.5",
+  "access_enforced": true
+}
 ```
+
+`access_enforced: true` means both `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`
+are set and `/api/chat` will reject requests without a valid
+`Cf-Access-Jwt-Assertion` header. In dev, leave them unset to disable
+enforcement.
 
 ## Deploy updates
 
@@ -107,8 +137,14 @@ Then restart so the retriever re-indexes:
 fly apps restart medsync8-telepsych
 ```
 
-Embedding cost is ~$0.02 per 1M tokens with `text-embedding-3-small`; a fresh
-re-index of a typical 200-doc corpus costs well under a dollar.
+With the default `EMBED_BACKEND=local`, embedding cost is **zero** (runs on
+CPU inside the Fly machine; ~30s for a 200-doc corpus on first boot).
+With `EMBED_BACKEND=openai`, cost is ~$0.02 per 1M tokens with
+`text-embedding-3-small` — well under a dollar for a typical 200-doc corpus.
+
+If you switch backends, the retriever detects the change (cache key includes
+the embedder name) and re-embeds the whole corpus automatically. Vectors from
+different models are never mixed.
 
 ### Nuking the cache
 
@@ -126,7 +162,8 @@ All secrets live in Fly. To rotate:
 
 ```bash
 fly secrets set ANTHROPIC_API_KEY=sk-ant-NEW
-fly secrets set OPENAI_API_KEY=sk-NEW
+fly secrets set OPENAI_API_KEY=sk-NEW               # only if EMBED_BACKEND=openai
+fly secrets set CF_ACCESS_AUD=<new-app-aud>         # if you recreate the CF app
 # Fly rolls the machine automatically after `secrets set`.
 ```
 
@@ -162,17 +199,112 @@ endpoint, or use Fly's built-in metrics.
 
 ---
 
+## Embedder backend
+
+The embedding model is pluggable via `backend/embedders.py`. Selection is
+driven by env vars:
+
+| Var | Default | Options |
+|---|---|---|
+| `EMBED_BACKEND` | `local` | `local` \| `openai` |
+| `LOCAL_EMBED_MODEL` | `sentence-transformers/bge-small-en-v1.5` | any Sentence-Transformers model id |
+| `OPENAI_EMBED_MODEL` | `text-embedding-3-small` | any OpenAI embedding model |
+| `OPENAI_API_KEY` | _(unset)_ | required only when `EMBED_BACKEND=openai` |
+
+The local backend loads the model from `/opt/hfcache` at container start
+(prefetched during the Docker build — no network needed at runtime). Vectors
+are L2-normalized, so cosine similarity == dot product.
+
+To switch backends without a redeploy:
+
+```bash
+fly secrets set EMBED_BACKEND=openai OPENAI_API_KEY=sk-...
+# machine rolls; retriever notices embedder change on boot and re-indexes
+```
+
+---
+
+## Cloudflare Access (SSO gating)
+
+`backend/auth.py` verifies the Cloudflare Access JWT that Cloudflare adds as
+`Cf-Access-Jwt-Assertion` on every request. It fetches the team's JWKS,
+caches it, and checks `iss`, `aud`, `exp`, and signature. The dependency is
+wired on `/api/chat` only (health stays public for probes).
+
+**One-time setup:**
+
+1. Cloudflare dashboard → **Zero Trust** → **Access** → **Applications** →
+   **Add application** → **Self-hosted**.
+2. Set the application domain to your Pages domain (e.g.
+   `medsync8-telepsych.pages.dev`) **and** the Fly API domain
+   (e.g. `medsync8-telepsych.fly.dev`). Both must be in the same application
+   so the JWT covers both hops.
+3. Policy: allow emails in your team (e.g. `@nehpsychiatry.com`) via Google
+   Workspace or any IdP.
+4. Copy the **Application Audience (AUD) Tag** and your team domain
+   (e.g. `nehpsychiatry.cloudflareaccess.com`).
+5. Set as Fly secrets:
+
+   ```bash
+   fly secrets set \
+     CF_ACCESS_TEAM_DOMAIN=nehpsychiatry.cloudflareaccess.com \
+     CF_ACCESS_AUD=<aud-tag>
+   ```
+
+6. Confirm `GET /api/health` shows `access_enforced: true`. Hitting
+   `/api/chat` without logging in should now return 401.
+
+**Bypass for local dev / CI:** leave both env vars unset. `require_access`
+becomes a no-op. Tests in `backend/tests/test_auth.py` exercise both modes.
+
+---
+
+## Frontend — Cloudflare Pages
+
+The frontend (`frontend/`) is a Vite/React SPA deployed to Cloudflare Pages.
+
+**One-time setup:**
+
+1. Cloudflare dashboard → **Workers & Pages** → **Create application** →
+   **Pages** → connect the GitHub repo.
+2. Project name: `medsync8-telepsych` (matches `frontend/wrangler.toml`).
+3. Framework preset: **Vite**. Build command: `npm run build`. Output
+   directory: `dist`. Root directory: `frontend`.
+4. Environment variable: `VITE_API_BASE=https://medsync8-telepsych.fly.dev`.
+5. Add the Pages domain to the same Cloudflare Access application as the API.
+
+**Auto-deploy from GitHub Actions:** `.github/workflows/deploy-pages.yml`
+pushes a build to Pages on every merge to `main`. Required repo secrets:
+
+- `CLOUDFLARE_API_TOKEN` — Cloudflare → My Profile → API Tokens → Create
+  token with "Pages: Edit" permission for the account.
+- `CLOUDFLARE_ACCOUNT_ID` — Cloudflare dashboard sidebar.
+
+Optional repo variable (not a secret): `VITE_API_BASE` if you want the CI
+build to embed a specific API URL.
+
+Local preview:
+
+```bash
+cd frontend
+npm ci
+VITE_API_BASE=http://localhost:8000 npm run dev
+```
+
+---
+
 ## HIPAA hardening checklist (before PHI traffic)
 
 - [ ] Anthropic enterprise BAA signed, Zero Data Retention enabled.
-- [ ] OpenAI BAA signed **OR** swap `backend/retriever.py._embed_batch` to a
-      local model (`sentence-transformers/all-MiniLM-L6-v2` or `bge-small`) —
-      about 10 lines of code and no external call for embeddings.
+- [x] **Embeddings run locally (bge-small-en-v1.5) by default — no embedding
+      data leaves the container.** OpenAI path remains available for teams
+      that have (or will sign) a BAA.
 - [ ] Hosting migrated to BAA-covered tier (AWS + BAA, Azure, Fly Enterprise).
-- [ ] SSO / identity provider gating `/api/chat` (Auth0, Clerk, or Cloudflare
-      Access).
-- [ ] Request/response audit log with user identity, timestamp, tool, and
-      hash of query (not content) persisted 6+ years.
+- [x] **SSO gating wired in code (Cloudflare Access JWT verification on
+      `/api/chat`).** Remaining: create the Cloudflare Access application and
+      set `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` secrets per environment.
+- [ ] Request/response audit log with user identity (`cf-access-authenticated-user-email`
+      header), timestamp, tool, and hash of query (not content) persisted 6+ years.
 - [ ] Breach-notification plan documented.
 - [ ] Minimum-necessary: strip session history older than N days.
 - [ ] Corpus volume encrypted at rest (Fly volumes are encrypted by default;
