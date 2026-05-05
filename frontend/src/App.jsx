@@ -56,7 +56,7 @@ const TEMPLATE_LIBRARY = [
 const TOOL_COLORS = { policy: "#5B9BD5", supervision: "#7BC9A0", lecture: "#E8AA5A", chat: "#C47BE0" };
 
 // ── API ─────────────────────────────────────────────────────────────────────
-async function callClaude(messages, systemPrompt, apiKey) {
+async function callClaude(messages, systemPrompt, apiKey, onChunk) {
   if (!apiKey) throw new Error("API key is required. Enter your Anthropic API key above.");
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -69,7 +69,8 @@ async function callClaude(messages, systemPrompt, apiKey) {
     },
     body: JSON.stringify({
       model: "claude-opus-4-6",
-      max_tokens: 4096,
+      max_tokens: 16000,
+      stream: true,
       system: systemPrompt,
       messages,
     }),
@@ -80,17 +81,50 @@ async function callClaude(messages, systemPrompt, apiKey) {
     throw new Error(err?.error?.message ?? `API request failed (${res.status})`);
   }
 
-  const data = await res.json();
-  return data.content?.find((b) => b.type === "text")?.text ?? "No response received.";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      try {
+        const event = JSON.parse(payload);
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          fullText += event.delta.text;
+          onChunk?.(fullText);
+        }
+      } catch {
+        // ignore non-JSON SSE lines (e.g. event: type lines)
+      }
+    }
+  }
+
+  return fullText || "No response received.";
+}
+
+// ── HELPERS ─────────────────────────────────────────────────────────────────
+function escapeHTML(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // ── PDF EXPORT ──────────────────────────────────────────────────────────────
 function exportToPDF(title, content) {
-  const escaped = content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escaped = escapeHTML(content);
   const win = window.open("", "_blank");
   if (!win) return;
   win.document.write(`<!DOCTYPE html><html><head>
-    <title>${title}</title>
+    <title>${escapeHTML(title)}</title>
     <style>
       body { font-family: Georgia, serif; max-width: 820px; margin: 40px auto; padding: 0 32px; color: #1a1a2e; line-height: 1.8; }
       h1 { font-size: 22px; border-bottom: 2px solid #2C5F8A; padding-bottom: 10px; color: #1A3D5C; }
@@ -99,7 +133,7 @@ function exportToPDF(title, content) {
       @media print { body { margin: 20px; } }
     </style>
     </head><body>
-    <h1>${title}</h1>
+    <h1>${escapeHTML(title)}</h1>
     <div class="meta">Generated: ${new Date().toLocaleDateString()} &middot; Nuestra Esperanza Health &middot; AI-assisted draft &mdash; clinical review required</div>
     <pre>${escaped}</pre>
     </body></html>`);
@@ -163,7 +197,7 @@ function MessageBubble({ role, content, onSave, onExport }) {
   );
 }
 
-function ApiKeyInput({ apiKey, onChange }) {
+function ApiKeyInput({ apiKey, onChange, onClear }) {
   const [visible, setVisible] = useState(false);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -189,6 +223,12 @@ function ApiKeyInput({ apiKey, onChange }) {
           background: "none", border: "none", color: "#3D6080",
           cursor: "pointer", fontSize: 12, padding: "2px 4px",
         }}>{visible ? "\u{1F441}" : "\u25CF\u25CF\u25CF"}</button>
+        {apiKey && (
+          <button onClick={onClear} title="Forget API key" style={{
+            background: "none", border: "none", color: "#C08080",
+            cursor: "pointer", fontSize: 11, padding: "2px 4px", fontFamily: "system-ui",
+          }}>{"\u2715"}</button>
+        )}
       </div>
       {apiKey && <span style={{ fontSize: 10, color: "#5BC98A", fontFamily: "system-ui" }}>{"\u2713"} Set</span>}
     </div>
@@ -197,7 +237,7 @@ function ApiKeyInput({ apiKey, onChange }) {
 
 // ── MAIN APP ────────────────────────────────────────────────────────────────
 export default function PsychiatryWorkbench() {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("anthropic_api_key") ?? "");
+  const [apiKey, setApiKey] = useState(() => sessionStorage.getItem("anthropic_api_key") ?? "");
   const [activeTool, setActiveTool] = useState("policy");
   const [activePanel, setActivePanel] = useState("chat");
   const [conversations, setConversations] = useState({ policy: [], supervision: [], lecture: [], chat: [] });
@@ -211,7 +251,18 @@ export default function PsychiatryWorkbench() {
   const bottomRef = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [conversations, loading]);
-  useEffect(() => { localStorage.setItem("anthropic_api_key", apiKey); }, [apiKey]);
+  useEffect(() => {
+    if (apiKey) sessionStorage.setItem("anthropic_api_key", apiKey);
+    else sessionStorage.removeItem("anthropic_api_key");
+  }, [apiKey]);
+  useEffect(() => {
+    const legacy = localStorage.getItem("anthropic_api_key");
+    if (legacy) {
+      sessionStorage.setItem("anthropic_api_key", legacy);
+      localStorage.removeItem("anthropic_api_key");
+      setApiKey(legacy);
+    }
+  }, []);
   useEffect(() => { localStorage.setItem("saved_responses", JSON.stringify(savedResponses)); }, [savedResponses]);
 
   const currentConvo = conversations[activeTool];
@@ -235,8 +286,25 @@ export default function PsychiatryWorkbench() {
     setLoading(true);
     setActivePanel("chat");
     try {
-      const reply = await callClaude(updated, SYSTEM_PROMPTS[activeTool], apiKey);
-      setConversations((p) => ({ ...p, [activeTool]: [...updated, { role: "assistant", content: reply }] }));
+      setConversations((p) => ({
+        ...p,
+        [activeTool]: [...updated, { role: "assistant", content: "" }],
+      }));
+      const reply = await callClaude(
+        updated,
+        SYSTEM_PROMPTS[activeTool],
+        apiKey,
+        (partialText) => {
+          setConversations((p) => ({
+            ...p,
+            [activeTool]: [...updated, { role: "assistant", content: partialText }],
+          }));
+        }
+      );
+      setConversations((p) => ({
+        ...p,
+        [activeTool]: [...updated, { role: "assistant", content: reply }],
+      }));
     } catch (e) {
       setConversations((p) => ({
         ...p,
@@ -312,7 +380,7 @@ export default function PsychiatryWorkbench() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <ApiKeyInput apiKey={apiKey} onChange={setApiKey} />
+          <ApiKeyInput apiKey={apiKey} onChange={setApiKey} onClear={() => setApiKey("")} />
           <button className="panel-btn" onClick={() => setActivePanel((p) => (p === "saved" ? "chat" : "saved"))} style={{
             padding: "6px 12px", borderRadius: 8,
             background: activePanel === "saved" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
@@ -498,7 +566,7 @@ export default function PsychiatryWorkbench() {
                       onExport={() => exportToPDF(`${tool.label} \u2014 ${new Date().toLocaleDateString()}`, msg.content)}
                     />
                   ))}
-                  {loading && <Spinner />}
+                  {loading && currentConvo[currentConvo.length - 1]?.content === "" && <Spinner />}
                   <div ref={bottomRef} style={{ height: 40 }} />
                 </>
               )}
