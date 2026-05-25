@@ -1,8 +1,11 @@
+import logging
 import os
 
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
@@ -32,6 +35,7 @@ def show_login():
                         st.success("Logged in successfully!")
                         st.rerun()
                 except Exception:
+                    logger.exception("Login failed")
                     st.error("Login failed. Please check your credentials.")
 
     with signup_tab:
@@ -45,6 +49,7 @@ def show_login():
                     supabase.auth.sign_up({"email": new_email, "password": new_password})
                     st.success("Sign-up successful! Please check your email to confirm.")
                 except Exception:
+                    logger.exception("Sign-up failed")
                     st.error("Sign-up failed. Please try again.")
 
 
@@ -86,7 +91,10 @@ else:
     st.title("Medication Sync Calculator")
 
     if st.sidebar.button("Logout"):
-        supabase.auth.sign_out()
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            logger.exception("Server-side sign-out failed")
         del st.session_state['user']
         st.rerun()
 
