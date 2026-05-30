@@ -125,10 +125,10 @@ export default function App() {
   const sendDisabled = !input.trim() || loading || !canSend;
 
   const sendMessage = useCallback(
-    async (text) => {
+    async (text, targetTool) => {
       if (!text.trim() || loading) return;
       const userMsg = { role: "user", content: text.trim() };
-      const toolId = activeTool;
+      const toolId = targetTool || activeTool;
 
       let updated;
       setConversations((p) => {
@@ -411,7 +411,7 @@ export default function App() {
                 const useTemplate = () => {
                   setActiveTool(tmpl.category);
                   setActivePanel("chat");
-                  sendMessage(tmpl.prompt);
+                  sendMessage(tmpl.prompt, tmpl.category);
                 };
                 return (
                   <div
