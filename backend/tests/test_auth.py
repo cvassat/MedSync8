@@ -1,0 +1,134 @@
+"""Tests for Cloudflare Access JWT verification."""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi.testclient import TestClient
+from jose import jwt
+
+from backend import auth as auth_module
+from backend import server as server_module
+from backend.retriever import Retriever
+
+
+# Generate a throwaway RSA keypair per test session and build a minimal JWKS
+# that the auth module's JWKSCache can consume.
+@pytest.fixture(scope="module")
+def rsa_keypair():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    return {"private_pem": private_pem, "public_pem": public_pem, "kid": "test-kid"}
+
+
+def _issue_token(keypair, *, aud: str, iss: str, email: str = "user@example.com",
+                 exp_offset: int = 300) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "aud": aud,
+            "iss": iss,
+            "email": email,
+            "iat": now,
+            "exp": now + exp_offset,
+        },
+        keypair["private_pem"],
+        algorithm="RS256",
+        headers={"kid": keypair["kid"]},
+    )
+
+
+@pytest.fixture
+def access_client(monkeypatch, tiny_corpus: Path, stub_embedder, stub_anthropic, rsa_keypair):
+    # Enable Access by setting env vars
+    monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "acme")
+    monkeypatch.setenv("CF_ACCESS_AUD", "test-aud-xyz")
+
+    # Stub out JWKS fetch to return the test public key
+    def fake_get(_config):
+        return {
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "kid": rsa_keypair["kid"],
+                    "use": "sig",
+                    "alg": "RS256",
+                    # jose accepts full PEM when passed as a JWKS key dict; use 'x5c' or fall back to direct PEM
+                    # Simpler path: patch jwt.decode to accept the PEM directly.
+                }
+            ]
+        }
+
+    # Rather than hand-rolling a JWK, monkeypatch the jose.jwt.decode call to
+    # verify against the PEM. This keeps the test focused on the middleware
+    # wiring, not on key-format plumbing.
+    from jose import jwt as real_jwt
+    original_decode = real_jwt.decode
+
+    def patched_decode(token, _key, **kwargs):
+        return original_decode(token, rsa_keypair["public_pem"], **kwargs)
+
+    monkeypatch.setattr(auth_module.jwt, "decode", patched_decode)
+    monkeypatch.setattr(auth_module._cache, "get", fake_get)
+
+    # Wire retriever + anthropic stubs
+    retriever = Retriever(str(tiny_corpus), stub_embedder)
+    retriever.load_or_build()
+    monkeypatch.setattr(server_module.app.router, "lifespan_context", None)
+    server_module.app.state.retriever = retriever
+    server_module.app.state.anthropic = stub_anthropic
+
+    return TestClient(server_module.app), rsa_keypair
+
+
+def test_chat_rejected_without_token(access_client):
+    client, _ = access_client
+    r = client.post("/api/chat", json={
+        "tool": "chat",
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert r.status_code == 401
+    assert "missing" in r.json()["detail"].lower()
+
+
+def test_chat_rejected_with_wrong_audience(access_client):
+    client, keypair = access_client
+    bad_token = _issue_token(
+        keypair, aud="wrong-aud", iss="https://acme.cloudflareaccess.com"
+    )
+    r = client.post(
+        "/api/chat",
+        json={"tool": "chat", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"CF-Access-JWT-Assertion": bad_token},
+    )
+    assert r.status_code == 401
+
+
+def test_chat_accepted_with_valid_token(access_client):
+    client, keypair = access_client
+    good_token = _issue_token(
+        keypair, aud="test-aud-xyz", iss="https://acme.cloudflareaccess.com"
+    )
+    r = client.post(
+        "/api/chat",
+        json={"tool": "chat", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"CF-Access-JWT-Assertion": good_token},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_health_reports_access_enforced(access_client):
+    client, _ = access_client
+    body = client.get("/api/health").json()
+    assert body["access_enforced"] is True

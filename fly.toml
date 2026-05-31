@@ -1,0 +1,59 @@
+# Fly.io deploy config for the MedSync8 telepsychiatry backend.
+# Deploy: `fly launch --copy-config --name medsync8-telepsych` then `fly deploy`.
+# Set secrets BEFORE first deploy:
+#   fly secrets set ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-...
+#
+# NOTE: Fly.io does not sign HIPAA BAAs on standard plans. Do NOT store PHI
+# in the corpus/ volume or send it through this service until you've moved
+# to a BAA-covered host (AWS w/ BAA, Azure w/ BAA, or Fly.io enterprise).
+
+app = "medsync8-telepsych"
+primary_region = "ord"  # Chicago — matches user timezone, change if needed
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  CORPUS_DIR = "/data/corpus"
+  RAG_TOP_K = "4"
+  ANTHROPIC_MODEL = "claude-opus-4-6"
+  # Embedding backend. "local" runs sentence-transformers in-process (no
+  # third-party data handling). "openai" uses the OpenAI embeddings API.
+  EMBED_BACKEND = "local"
+  LOCAL_EMBED_MODEL = "sentence-transformers/bge-small-en-v1.5"
+  # Audit log is written to the persistent volume so it survives deploys.
+  AUDIT_LOG_PATH = "/data/audit.log"
+  # Set ALLOWED_ORIGINS to your deployed frontend URL(s) before going live.
+  ALLOWED_ORIGINS = "http://localhost:5173"
+  # Set these via `fly secrets set` in production (never commit them):
+  #   CF_ACCESS_TEAM_DOMAIN  (e.g. "acme" for acme.cloudflareaccess.com)
+  #   CF_ACCESS_AUD          (Application AUD tag from the Access dashboard)
+  #   AUDIT_SALT             (random hex; rotate to unlink old query hashes)
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  # Local embeddings need more RAM than the OpenAI path. bge-small uses
+  # ~400MB resident; 1GB gives comfortable headroom.
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024
+
+[mounts]
+  source = "corpus_data"
+  destination = "/data"
+  initial_size = "1gb"
