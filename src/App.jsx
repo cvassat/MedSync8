@@ -94,6 +94,7 @@ const GLOBAL_STYLES = `
   textarea { caret-color: #5B9BD5; }
   textarea:focus { outline: none; box-shadow: 0 0 0 1px rgba(91,155,213,0.3); border-radius: 4px; }
   .saved-card:hover { background: rgba(255,255,255,0.05) !important; }
+  .dash-card:hover { background: rgba(255,255,255,0.05) !important; transform: translateY(-1px); }
   @media (max-width: 600px) {
     .tab-btn { padding: 6px 10px !important; font-size: 12px !important; }
     .tab-label { display: none; }
@@ -226,6 +227,23 @@ export default function App() {
     [templateFilter]
   );
 
+  const dashboardStats = useMemo(() => {
+    const toolStats = TOOLS.map((t) => {
+      const msgs = conversations[t.id];
+      const exchanges = Math.ceil(msgs.length / 2);
+      const wordCount = msgs.reduce((sum, m) => sum + m.content.split(/\s+/).filter(Boolean).length, 0);
+      const savedCount = savedResponses.filter((r) => r.tool === t.id).length;
+      return { id: t.id, label: t.label, icon: t.icon, color: TOOL_COLORS[t.id], messages: msgs.length, exchanges, wordCount, savedCount };
+    });
+    const totalMessages = toolStats.reduce((s, t) => s + t.messages, 0);
+    const totalExchanges = toolStats.reduce((s, t) => s + t.exchanges, 0);
+    const totalWords = toolStats.reduce((s, t) => s + t.wordCount, 0);
+    const totalSaved = savedResponses.length;
+    const mostActive = toolStats.reduce((a, b) => (b.exchanges > a.exchanges ? b : a), toolStats[0]);
+    const recentSaves = [...savedResponses].sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt)).slice(0, 5);
+    return { toolStats, totalMessages, totalExchanges, totalWords, totalSaved, mostActive, recentSaves };
+  }, [conversations, savedResponses]);
+
   return (
     <div
       style={{
@@ -279,24 +297,44 @@ export default function App() {
             </div>
           </div>
         </div>
-        <button
-          className="panel-btn"
-          onClick={() => setActivePanel((p) => (p === "saved" ? "chat" : "saved"))}
-          aria-label="Saved responses"
-          style={{
-            padding: "6px 12px",
-            borderRadius: 8,
-            background: activePanel === "saved" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
-            border: `1px solid ${activePanel === "saved" ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
-            color: activePanel === "saved" ? "#9DCAF0" : "#5B7A96",
-            fontSize: 12,
-            cursor: "pointer",
-            fontFamily: "system-ui",
-            transition: "all 0.2s",
-          }}
-        >
-          {"\uD83D\uDCBE"} {savedResponses.length} Saved
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            className="panel-btn"
+            onClick={() => setActivePanel((p) => (p === "dashboard" ? "chat" : "dashboard"))}
+            aria-label="Dashboard"
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: activePanel === "dashboard" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${activePanel === "dashboard" ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
+              color: activePanel === "dashboard" ? "#9DCAF0" : "#5B7A96",
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "system-ui",
+              transition: "all 0.2s",
+            }}
+          >
+            {"\uD83D\uDCCA"} Dashboard
+          </button>
+          <button
+            className="panel-btn"
+            onClick={() => setActivePanel((p) => (p === "saved" ? "chat" : "saved"))}
+            aria-label="Saved responses"
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: activePanel === "saved" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${activePanel === "saved" ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
+              color: activePanel === "saved" ? "#9DCAF0" : "#5B7A96",
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "system-ui",
+              transition: "all 0.2s",
+            }}
+          >
+            {"\uD83D\uDCBE"} {savedResponses.length} Saved
+          </button>
+        </div>
       </header>
 
       {/* ── SETUP BANNER (when no API key) ── */}
@@ -464,6 +502,148 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* DASHBOARD PANEL */}
+        {activePanel === "dashboard" && (
+          <div style={{ flex: 1, overflow: "auto", paddingTop: 16, animation: "fadeIn 0.3s" }}>
+            {/* Overview Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 20 }}>
+              {[
+                { label: "Total Exchanges", value: dashboardStats.totalExchanges, icon: "💬", color: "#5B9BD5" },
+                { label: "Messages", value: dashboardStats.totalMessages, icon: "📨", color: "#7BC9A0" },
+                { label: "Words Generated", value: dashboardStats.totalWords.toLocaleString(), icon: "📝", color: "#E8AA5A" },
+                { label: "Saved Responses", value: dashboardStats.totalSaved, icon: "💾", color: "#C47BE0" },
+              ].map((card) => (
+                <div
+                  key={card.label}
+                  className="dash-card"
+                  style={{
+                    background: "rgba(14,28,45,0.7)",
+                    border: `1px solid ${card.color}33`,
+                    borderRadius: 12,
+                    padding: 16,
+                    textAlign: "center",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  <div style={{ fontSize: 24, marginBottom: 6 }}>{card.icon}</div>
+                  <div style={{ fontSize: 24, fontWeight: 700, color: card.color, fontFamily: "system-ui" }}>{card.value}</div>
+                  <div style={{ fontSize: 11, color: "#4A6880", fontFamily: "system-ui", marginTop: 4 }}>{card.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Per-Tool Breakdown */}
+            <div style={{ fontSize: 13, color: "#5B7A96", fontFamily: "system-ui", marginBottom: 10, fontWeight: 600 }}>Tool Activity</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginBottom: 20 }}>
+              {dashboardStats.toolStats.map((t) => {
+                const pct = dashboardStats.totalExchanges > 0 ? Math.round((t.exchanges / dashboardStats.totalExchanges) * 100) : 0;
+                return (
+                  <div
+                    key={t.id}
+                    className="dash-card"
+                    style={{
+                      background: "rgba(14,28,45,0.7)",
+                      border: `1px solid ${t.color}33`,
+                      borderRadius: 12,
+                      padding: 16,
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: "#C8DCF0" }}>{t.icon} {t.label}</span>
+                      <span style={{ fontSize: 10, color: t.color, fontFamily: "system-ui", background: `${t.color}1A`, padding: "2px 8px", borderRadius: 10 }}>
+                        {pct}% of activity
+                      </span>
+                    </div>
+                    {/* Progress bar */}
+                    <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, marginBottom: 12 }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: t.color, borderRadius: 2, transition: "width 0.5s ease" }} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontFamily: "system-ui" }}>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: t.color }}>{t.exchanges}</div>
+                        <div style={{ fontSize: 10, color: "#4A6880" }}>Exchanges</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: t.color }}>{t.wordCount.toLocaleString()}</div>
+                        <div style={{ fontSize: 10, color: "#4A6880" }}>Words</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: t.color }}>{t.messages}</div>
+                        <div style={{ fontSize: 10, color: "#4A6880" }}>Messages</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: t.color }}>{t.savedCount}</div>
+                        <div style={{ fontSize: 10, color: "#4A6880" }}>Saved</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Most Active + Recent Saves */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {/* Most Active Tool */}
+              <div style={{ background: "rgba(14,28,45,0.7)", border: `1px solid ${dashboardStats.mostActive.color}33`, borderRadius: 12, padding: 16 }}>
+                <div style={{ fontSize: 11, color: "#5B7A96", fontFamily: "system-ui", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>
+                  Most Active Tool
+                </div>
+                {dashboardStats.mostActive.exchanges > 0 ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 12,
+                        background: `${dashboardStats.mostActive.color}1A`,
+                        border: `1px solid ${dashboardStats.mostActive.color}44`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 24,
+                      }}
+                    >
+                      {dashboardStats.mostActive.icon}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: dashboardStats.mostActive.color }}>{dashboardStats.mostActive.label}</div>
+                      <div style={{ fontSize: 12, color: "#4A6880", fontFamily: "system-ui" }}>{dashboardStats.mostActive.exchanges} exchanges</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#2E4A60", fontFamily: "system-ui" }}>No conversations yet</div>
+                )}
+              </div>
+
+              {/* Recent Saves */}
+              <div style={{ background: "rgba(14,28,45,0.7)", border: "1px solid rgba(196,123,224,0.2)", borderRadius: 12, padding: 16 }}>
+                <div style={{ fontSize: 11, color: "#5B7A96", fontFamily: "system-ui", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>
+                  Recent Saves
+                </div>
+                {dashboardStats.recentSaves.length === 0 ? (
+                  <div style={{ fontSize: 13, color: "#2E4A60", fontFamily: "system-ui" }}>No saved responses yet</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {dashboardStats.recentSaves.map((r) => (
+                      <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "system-ui" }}>
+                        <span style={{ color: TOOL_COLORS[r.tool], flexShrink: 0 }}>{TOOL_MAP[r.tool]?.icon}</span>
+                        <span style={{ color: "#7A9DB8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{r.title}</span>
+                        <span style={{ color: "#2E4A60", flexShrink: 0, fontSize: 10 }}>{r.savedAt}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer note */}
+            <div style={{ textAlign: "center", fontSize: 10, color: "#1E3348", fontFamily: "system-ui", marginTop: 16, paddingBottom: 8 }}>
+              Statistics based on current session data stored in your browser
             </div>
           </div>
         )}
