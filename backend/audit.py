@@ -43,23 +43,15 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 DEFAULT_PATH = os.environ.get("AUDIT_LOG_PATH", "./audit.log")
-SALT = os.environ.get("AUDIT_SALT", "")
+_RAW_SALT = os.environ.get("AUDIT_SALT", "")
 RECENT_BUFFER_SIZE = 200  # in-memory ring buffer for /api/audit/recent
 
-_SALT_WARNING_ISSUED = False
-
-
-def _get_salt() -> str:
-    global _SALT_WARNING_ISSUED
-    if not SALT:
-        if not _SALT_WARNING_ISSUED:
-            log.warning(
-                "AUDIT_SALT is not set. Audit hashes are unsalted and cross-deployment "
-                "correlation is possible. Set AUDIT_SALT in production."
-            )
-            _SALT_WARNING_ISSUED = True
-        return "medsync8-default-salt-change-me"
-    return SALT
+if not _RAW_SALT:
+    log.warning(
+        "AUDIT_SALT is not set. Audit hashes use a default salt — set AUDIT_SALT "
+        "in production to prevent cross-deployment correlation."
+    )
+_EFFECTIVE_SALT = _RAW_SALT or "medsync8-default-salt-change-me"
 
 
 def hash_query(text: str, *, salt: str | None = None) -> str:
@@ -68,7 +60,7 @@ def hash_query(text: str, *, salt: str | None = None) -> str:
     16 hex chars = 64 bits; collisions across a single deployment's log
     are effectively impossible while keeping the log compact.
     """
-    s = (salt if salt is not None else _get_salt()).encode("utf-8")
+    s = (salt if salt is not None else _EFFECTIVE_SALT).encode("utf-8")
     h = hashlib.sha256(s + b"\x00" + text.encode("utf-8", errors="replace"))
     return h.hexdigest()[:16]
 

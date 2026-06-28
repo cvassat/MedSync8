@@ -14,11 +14,14 @@ app.set("trust proxy", 1);
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "http://localhost:5173", credentials: false }));
 app.use(express.json({ limit: "100kb" }));
 
-// Minimal security headers (no external dep required).
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+};
+
 app.use((_req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
   next();
 });
 
@@ -39,6 +42,7 @@ const SYSTEM_PROMPTS = {
 
 const VALID_TOOLS = new Set(Object.keys(SYSTEM_PROMPTS));
 const VALID_TOOLS_LIST = [...VALID_TOOLS].join(", ");
+const VALID_ROLES = new Set(["user", "assistant"]);
 
 // ── Anthropic Client ────────────────────────────────────────────────────────
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -57,7 +61,6 @@ function validateRequest(body) {
     return { error: "Too many messages (max 100).", status: 400 };
   }
 
-  const VALID_ROLES = new Set(["user", "assistant"]);
   for (const m of messages) {
     if (!VALID_ROLES.has(m.role)) {
       return { error: `Invalid message role "${m.role}". Must be "user" or "assistant".`, status: 400 };

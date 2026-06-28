@@ -101,6 +101,21 @@ const GLOBAL_STYLES = `
   }
 `;
 
+function panelBtnStyle(panel, activePanel) {
+  const active = activePanel === panel;
+  return {
+    padding: "6px 12px",
+    borderRadius: 8,
+    background: active ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
+    border: `1px solid ${active ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
+    color: active ? "#9DCAF0" : "#5B7A96",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "system-ui",
+    transition: "all 0.2s",
+  };
+}
+
 // ── Main App ────────────────────────────────────────────────────────────────
 export default function App() {
   const [activeTool, setActiveTool] = useState("policy");
@@ -232,7 +247,7 @@ export default function App() {
       acc[r.tool] = (acc[r.tool] || 0) + 1;
       return acc;
     }, {});
-    const recentSaves = [...savedResponses].sort((a, b) => b.id - a.id).slice(0, 5);
+    const recentSaves = savedResponses.slice(0, 5);
     return { savedByTool, totalSaved: savedResponses.length, recentSaves };
   }, [savedResponses]);
 
@@ -312,17 +327,7 @@ export default function App() {
             className="panel-btn"
             onClick={() => { if (abortRef.current) abortRef.current.abort(); setActivePanel((p) => (p === "dashboard" ? "chat" : "dashboard")); }}
             aria-label="Dashboard"
-            style={{
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: activePanel === "dashboard" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
-              border: `1px solid ${activePanel === "dashboard" ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
-              color: activePanel === "dashboard" ? "#9DCAF0" : "#5B7A96",
-              fontSize: 12,
-              cursor: "pointer",
-              fontFamily: "system-ui",
-              transition: "all 0.2s",
-            }}
+            style={panelBtnStyle("dashboard", activePanel)}
           >
             {"\uD83D\uDCCA"} Dashboard
           </button>
@@ -330,17 +335,7 @@ export default function App() {
             className="panel-btn"
             onClick={() => { if (abortRef.current) abortRef.current.abort(); setActivePanel((p) => (p === "saved" ? "chat" : "saved")); }}
             aria-label="Saved responses"
-            style={{
-              padding: "6px 12px",
-              borderRadius: 8,
-              background: activePanel === "saved" ? "rgba(91,155,213,0.2)" : "rgba(255,255,255,0.05)",
-              border: `1px solid ${activePanel === "saved" ? "rgba(91,155,213,0.4)" : "rgba(255,255,255,0.07)"}`,
-              color: activePanel === "saved" ? "#9DCAF0" : "#5B7A96",
-              fontSize: 12,
-              cursor: "pointer",
-              fontFamily: "system-ui",
-              transition: "all 0.2s",
-            }}
+            style={panelBtnStyle("saved", activePanel)}
           >
             {"\uD83D\uDCBE"} {savedResponses.length} Saved
           </button>
@@ -406,7 +401,7 @@ export default function App() {
         })}
         <button
           className="tab-btn"
-          onClick={() => setActivePanel((p) => (p === "templates" ? "chat" : "templates"))}
+          onClick={() => { if (abortRef.current) abortRef.current.abort(); setActivePanel((p) => (p === "templates" ? "chat" : "templates")); }}
           style={{
             marginLeft: "auto",
             padding: "8px 14px",
