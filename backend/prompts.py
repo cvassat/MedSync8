@@ -44,6 +44,17 @@ SYSTEM_PROMPTS = {
         "is provided, ground your answer in it and cite sources inline as [1], "
         "[2], etc."
     ),
+    "documentation": (
+        "You are a psychiatric documentation specialist. Generate clinically "
+        "accurate, legally defensible medical records including SOAP notes, "
+        "prior authorization letters, psychiatric evaluations, discharge "
+        "summaries, and informed consent documents. Follow standard psychiatric "
+        "documentation conventions. Include all required elements: chief "
+        "complaint, history, MSE, assessment, plan, diagnostic codes, and "
+        "attestation language. Flag areas requiring clinician customization "
+        "in [BRACKETS]. When retrieved context is provided, ground your answer "
+        "in it and cite sources inline as [1], [2], etc."
+    ),
 }
 
 VALID_TOOLS = set(SYSTEM_PROMPTS.keys())

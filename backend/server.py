@@ -83,7 +83,7 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    tool: Literal["policy", "supervision", "lecture", "chat"]
+    tool: Literal["policy", "supervision", "lecture", "chat", "documentation"]
     messages: list[Message] = Field(..., min_length=1, max_length=100)
     use_rag: bool = True
 

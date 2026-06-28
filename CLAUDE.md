@@ -28,7 +28,7 @@ CI runs on every PR and push to main: `pytest backend/tests -q` (Python 3.11) an
 
 ## Architecture
 
-Two server options exist, sharing the same React frontend and the same four tool system prompts:
+Two server options exist, sharing the same React frontend and the same five tool system prompts:
 
 **Express proxy (`server.js`, port 3001)** — lightweight dev/simple deployment path. Proxies requests to Anthropic API with rate limiting (20 req/min), message sanitization (50KB cap), and server-side API key. Vite proxies `/api` to this during development.
 
@@ -49,12 +49,19 @@ Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GE
 
 ## Key Conventions
 
-- **Tool IDs** (`policy`, `supervision`, `lecture`, `chat`) are the central organizing concept. They're defined once in `src/constants.js` (TOOLS array) and mirrored in `server.js` SYSTEM_PROMPTS and `backend/prompts.py` SYSTEM_PROMPTS. Add new tools in all three places.
+- **Tool IDs** (`policy`, `supervision`, `lecture`, `chat`, `documentation`) are the central organizing concept. They're defined once in `src/constants.js` (TOOLS array, TOOL_COLORS, QUICK_PROMPTS, TEMPLATE_LIBRARY) and mirrored in `server.js` SYSTEM_PROMPTS and `backend/prompts.py` SYSTEM_PROMPTS. Also update the Pydantic `Literal` in `backend/server.py` ChatRequest. Add new tools in **all four places**.
 - **TOOL_MAP** in `constants.js` provides O(1) lookups; use it instead of `TOOLS.find()`.
 - **ERROR_PREFIX** (`⚠️`) in `constants.js` is the shared sentinel for error messages — used in `App.jsx` and `MessageBubble.jsx` to detect error state.
 - **Streaming callbacks** (`sendMessage`) use `setConversations` functional updaters to avoid capturing stale `conversations` in the dependency array — this prevents callback recreation on every streaming chunk.
 - Backend tests use `StubEmbedder` and `StubAnthropic` from `conftest.py` — no network calls needed.
 - Python imports use relative form within the backend package (e.g., `from .audit import ChatAuditContext`).
+
+## Security Notes
+
+- **Express proxy**: Set `ALLOWED_ORIGIN` in production (defaults to localhost). `trust proxy 1` is set — verify your proxy hop count matches your infra.
+- **FastAPI auth**: Set `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` for Cloudflare Access JWT validation. Without these, all endpoints are publicly accessible (dev only).
+- **Audit salt**: Set `AUDIT_SALT` env var in production to a random secret. Without it, audit hashes are unsalted (warning is logged).
+- **ANTHROPIC_API_KEY**: Express server will exit at startup if missing. FastAPI logs a warning.
 
 ## Environment Variables
 

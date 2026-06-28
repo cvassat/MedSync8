@@ -5,6 +5,7 @@ export const TOOLS = [
   { id: "supervision", label: "Supervision", icon: "🩺", desc: "NP/PA oversight tools" },
   { id: "lecture", label: "Lecture", icon: "🎓", desc: "CME content builder" },
   { id: "chat", label: "Consult", icon: "💬", desc: "Clinical consultation" },
+  { id: "documentation", label: "Documents", icon: "📄", desc: "Clinical documentation" },
 ];
 
 export const TOOL_MAP = Object.fromEntries(TOOLS.map((t) => [t.id, t]));
@@ -14,6 +15,7 @@ export const TOOL_COLORS = {
   supervision: "#7BC9A0",
   lecture: "#E8AA5A",
   chat: "#C47BE0",
+  documentation: "#5BC9C9",
 };
 
 export const QUICK_PROMPTS = {
@@ -41,6 +43,12 @@ export const QUICK_PROMPTS = {
     "What are defensible Schedule II supply limits for my NP supervisees?",
     "Walk me through ERISA standards for psychiatric LTD evaluations",
   ],
+  documentation: [
+    "SOAP note for a new patient ADHD evaluation with stimulant initiation",
+    "Prior authorization letter for Vyvanse \u2014 ADHD with failed generic amphetamine trial",
+    "Psychiatric discharge summary template for inpatient to outpatient transition",
+    "Informed consent document for off-label ketamine treatment",
+  ],
 };
 
 export const TEMPLATE_LIBRARY = [
@@ -52,4 +60,6 @@ export const TEMPLATE_LIBRARY = [
   { id: "t6", category: "lecture", label: "BPD Teaching Case Series", prompt: "Develop a 3-case teaching series on borderline personality disorder covering initial presentation, diagnostic reasoning using DSM-5 criteria, DBT conceptualization, and treatment planning." },
   { id: "t7", category: "chat", label: "DEA Telehealth FAQ", prompt: "Give me a comprehensive FAQ covering the current DEA telehealth prescribing rules post-COVID, including Ryan Haight exceptions, in-person requirements by substance schedule, and state law conflicts." },
   { id: "t8", category: "chat", label: "Collaborative Practice Checklist", prompt: "What are the key legal and clinical requirements for a valid psychiatric collaborative practice agreement in Texas, and what are the most common compliance gaps?" },
+  { id: "t9", category: "documentation", label: "ADHD SOAP Note", prompt: "Generate a complete SOAP note for a new patient adult ADHD evaluation including chief complaint, history of present illness, mental status exam findings, DSM-5 diagnostic reasoning, and stimulant initiation plan with safety counseling." },
+  { id: "t10", category: "documentation", label: "Prior Auth Letter — Stimulants", prompt: "Draft a prior authorization appeal letter for a brand-name stimulant (Vyvanse 50mg) documenting medical necessity, failed trials of generic alternatives, clinical rationale, and supporting DSM-5 criteria." },
 ];

@@ -28,13 +28,10 @@ def client(monkeypatch, tmp_path: Path, tiny_corpus: Path, stub_embedder, stub_a
     return TestClient(server_module.app)
 
 
-def test_health_reports_rag_enabled(client):
+def test_health_returns_ok(client):
     r = client.get("/api/health")
     assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is True
-    assert body["rag_enabled"] is True
-    assert body["corpus_chunks"] > 0
+    assert r.json() == {"ok": True}
 
 
 def test_chat_returns_reply_and_citations(client, stub_anthropic):
@@ -97,9 +94,49 @@ def test_chat_writes_audit_event_without_query_text(client):
     assert event["event"] == "chat"
     assert event["tool"] == "policy"
     assert event["status"] == "ok"
-    assert event["query_len"] == len(leaky)
+    assert "query_len_bucket" in event
 
     # Neither the endpoint response nor the persisted file contains the raw query.
     assert leaky not in r2.text
     log_path = audit_module.get_logger().path
     assert leaky not in log_path.read_text(encoding="utf-8")
+
+
+def test_chat_documentation_tool(client, stub_anthropic):
+    r = client.post("/api/chat", json={
+        "tool": "documentation",
+        "messages": [{"role": "user", "content": "Generate a SOAP note for an ADHD evaluation"}],
+        "use_rag": False,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "stub-reply" in body["reply"]
+    assert "SOAP" in stub_anthropic.last_call["system"] or "documentation" in stub_anthropic.last_call["system"].lower()
+
+
+def test_chat_rejects_too_many_messages(client):
+    messages = [{"role": "user", "content": f"msg {i}"} for i in range(101)]
+    r = client.post("/api/chat", json={"tool": "chat", "messages": messages})
+    assert r.status_code == 422
+
+
+def test_health_does_not_expose_internals(client):
+    r = client.get("/api/health")
+    body = r.json()
+    assert "model" not in body
+    assert "rag_enabled" not in body
+    assert "corpus_chunks" not in body
+    assert "embedder" not in body
+    assert "access_enforced" not in body
+
+
+def test_audit_event_has_bucketed_query_len(client):
+    r = client.post("/api/chat", json={
+        "tool": "policy",
+        "messages": [{"role": "user", "content": "short"}],
+        "use_rag": False,
+    })
+    assert r.status_code == 200
+    events = client.get("/api/audit/recent").json()["events"]
+    assert events[-1]["query_len_bucket"] == "<100"
+    assert "query_len" not in events[-1]
