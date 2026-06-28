@@ -121,7 +121,7 @@ export default function App() {
   }, [conversations, loading]);
 
   const currentConvo = conversations[activeTool];
-  const tool = TOOLS.find((t) => t.id === activeTool);
+  const tool = TOOL_MAP[activeTool];
   const canSend = connectionStatus === "connected";
   const sendDisabled = !input.trim() || loading || !canSend;
 
@@ -227,22 +227,32 @@ export default function App() {
     [templateFilter]
   );
 
+  const savedStats = useMemo(() => {
+    const savedByTool = savedResponses.reduce((acc, r) => {
+      acc[r.tool] = (acc[r.tool] || 0) + 1;
+      return acc;
+    }, {});
+    const recentSaves = [...savedResponses].sort((a, b) => b.id - a.id).slice(0, 5);
+    return { savedByTool, totalSaved: savedResponses.length, recentSaves };
+  }, [savedResponses]);
+
   const dashboardStats = useMemo(() => {
     const toolStats = TOOLS.map((t) => {
-      const msgs = conversations[t.id];
-      const exchanges = Math.ceil(msgs.length / 2);
-      const wordCount = msgs.reduce((sum, m) => sum + m.content.split(/\s+/).filter(Boolean).length, 0);
-      const savedCount = savedResponses.filter((r) => r.tool === t.id).length;
-      return { id: t.id, label: t.label, icon: t.icon, color: TOOL_COLORS[t.id], messages: msgs.length, exchanges, wordCount, savedCount };
+      const msgs = conversations[t.id].filter((m) => !m.streaming);
+      const exchanges = Math.floor(msgs.length / 2);
+      const wordCount = msgs.reduce((sum, m) => {
+        const trimmed = m.content.trim();
+        return sum + (trimmed ? trimmed.split(/\s+/).length : 0);
+      }, 0);
+      return { id: t.id, label: t.label, icon: t.icon, color: TOOL_COLORS[t.id], messages: msgs.length, exchanges, wordCount, savedCount: savedStats.savedByTool[t.id] || 0 };
     });
-    const totalMessages = toolStats.reduce((s, t) => s + t.messages, 0);
-    const totalExchanges = toolStats.reduce((s, t) => s + t.exchanges, 0);
-    const totalWords = toolStats.reduce((s, t) => s + t.wordCount, 0);
-    const totalSaved = savedResponses.length;
-    const mostActive = toolStats.reduce((a, b) => (b.exchanges > a.exchanges ? b : a), toolStats[0]);
-    const recentSaves = [...savedResponses].sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt)).slice(0, 5);
-    return { toolStats, totalMessages, totalExchanges, totalWords, totalSaved, mostActive, recentSaves };
-  }, [conversations, savedResponses]);
+    const { totalMessages, totalExchanges, totalWords } = toolStats.reduce(
+      (acc, t) => ({ totalMessages: acc.totalMessages + t.messages, totalExchanges: acc.totalExchanges + t.exchanges, totalWords: acc.totalWords + t.wordCount }),
+      { totalMessages: 0, totalExchanges: 0, totalWords: 0 }
+    );
+    const mostActive = totalExchanges > 0 ? toolStats.reduce((a, b) => (b.exchanges > a.exchanges ? b : a)) : null;
+    return { toolStats, totalMessages, totalExchanges, totalWords, totalSaved: savedStats.totalSaved, mostActive, recentSaves: savedStats.recentSaves };
+  }, [conversations, savedStats]);
 
   return (
     <div
@@ -300,7 +310,7 @@ export default function App() {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
             className="panel-btn"
-            onClick={() => setActivePanel((p) => (p === "dashboard" ? "chat" : "dashboard"))}
+            onClick={() => { if (abortRef.current) abortRef.current.abort(); setActivePanel((p) => (p === "dashboard" ? "chat" : "dashboard")); }}
             aria-label="Dashboard"
             style={{
               padding: "6px 12px",
@@ -318,7 +328,7 @@ export default function App() {
           </button>
           <button
             className="panel-btn"
-            onClick={() => setActivePanel((p) => (p === "saved" ? "chat" : "saved"))}
+            onClick={() => { if (abortRef.current) abortRef.current.abort(); setActivePanel((p) => (p === "saved" ? "chat" : "saved")); }}
             aria-label="Saved responses"
             style={{
               padding: "6px 12px",
@@ -589,11 +599,11 @@ export default function App() {
             {/* Most Active + Recent Saves */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               {/* Most Active Tool */}
-              <div style={{ background: "rgba(14,28,45,0.7)", border: `1px solid ${dashboardStats.mostActive.color}33`, borderRadius: 12, padding: 16 }}>
+              <div style={{ background: "rgba(14,28,45,0.7)", border: `1px solid ${dashboardStats.mostActive ? `${dashboardStats.mostActive.color}33` : "rgba(255,255,255,0.07)"}`, borderRadius: 12, padding: 16 }}>
                 <div style={{ fontSize: 11, color: "#5B7A96", fontFamily: "system-ui", marginBottom: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>
                   Most Active Tool
                 </div>
-                {dashboardStats.mostActive.exchanges > 0 ? (
+                {dashboardStats.mostActive ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <div
                       style={{
@@ -612,7 +622,7 @@ export default function App() {
                     </div>
                     <div>
                       <div style={{ fontSize: 16, fontWeight: 700, color: dashboardStats.mostActive.color }}>{dashboardStats.mostActive.label}</div>
-                      <div style={{ fontSize: 12, color: "#4A6880", fontFamily: "system-ui" }}>{dashboardStats.mostActive.exchanges} exchanges</div>
+                      <div style={{ fontSize: 12, color: "#4A6880", fontFamily: "system-ui" }}>{dashboardStats.mostActive.exchanges} exchange{dashboardStats.mostActive.exchanges !== 1 ? "s" : ""}</div>
                     </div>
                   </div>
                 ) : (
@@ -633,7 +643,7 @@ export default function App() {
                       <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "system-ui" }}>
                         <span style={{ color: TOOL_COLORS[r.tool], flexShrink: 0 }}>{TOOL_MAP[r.tool]?.icon}</span>
                         <span style={{ color: "#7A9DB8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{r.title}</span>
-                        <span style={{ color: "#2E4A60", flexShrink: 0, fontSize: 10 }}>{r.savedAt}</span>
+                        <span style={{ color: "#2E4A60", flexShrink: 0, fontSize: 10 }}>{new Date(r.savedAt).toLocaleDateString()}</span>
                       </div>
                     ))}
                   </div>
@@ -685,7 +695,7 @@ export default function App() {
                         >
                           {TOOL_MAP[r.tool]?.icon} {r.toolLabel}
                         </span>
-                        <span style={{ fontSize: 11, color: "#2E4A60", fontFamily: "system-ui" }}>{r.savedAt}</span>
+                        <span style={{ fontSize: 11, color: "#2E4A60", fontFamily: "system-ui" }}>{new Date(r.savedAt).toLocaleDateString()}</span>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button

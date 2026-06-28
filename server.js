@@ -7,9 +7,20 @@ import Anthropic from "@anthropic-ai/sdk";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust one proxy hop so rate-limiter sees the real client IP behind Fly.io/Nginx.
+app.set("trust proxy", 1);
+
 // ── Middleware ───────────────────────────────────────────────────────────────
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "http://localhost:5173" }));
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "http://localhost:5173", credentials: false }));
 app.use(express.json({ limit: "100kb" }));
+
+// Minimal security headers (no external dep required).
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  next();
+});
 
 const apiLimiter = rateLimit({
   windowMs: 60_000,
@@ -41,10 +52,23 @@ function validateRequest(body) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { error: "Messages must be a non-empty array.", status: 400 };
   }
+  if (messages.length > 100) {
+    return { error: "Too many messages (max 100).", status: 400 };
+  }
+
+  const VALID_ROLES = new Set(["user", "assistant"]);
+  for (const m of messages) {
+    if (!VALID_ROLES.has(m.role)) {
+      return { error: `Invalid message role "${m.role}". Must be "user" or "assistant".`, status: 400 };
+    }
+    if (typeof m.content !== "string") {
+      return { error: "Message content must be a string.", status: 400 };
+    }
+  }
 
   const sanitizedMessages = messages.map((m) => ({
-    role: m.role === "user" ? "user" : "assistant",
-    content: String(m.content).slice(0, 50_000),
+    role: m.role,
+    content: m.content.slice(0, 50_000),
   }));
 
   const tokens = Math.min(Math.max(Number(maxTokens) || 4096, 256), 8192);
@@ -53,12 +77,12 @@ function validateRequest(body) {
 }
 
 function handleApiError(err, res) {
-  console.error("Claude API error:", err.message);
+  console.error("Claude API error:", err.status, err.message);
   if (err.status === 429) {
-    return res.status(429).json({ error: "Rate limited by Anthropic. Please wait and try again." });
+    return res.status(429).json({ error: "Rate limited. Please wait and try again." });
   }
   if (err.status === 401) {
-    return res.status(500).json({ error: "Invalid API key. Check your ANTHROPIC_API_KEY." });
+    return res.status(500).json({ error: "Server configuration error. Contact support." });
   }
   res.status(500).json({ error: "Failed to get response. Please try again." });
 }
@@ -144,13 +168,15 @@ app.post("/api/claude/stream", apiLimiter, async (req, res) => {
 
 // ── Health check ────────────────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", hasApiKey: !!process.env.ANTHROPIC_API_KEY });
+  res.json({ status: "ok" });
 });
 
 // ── Start ───────────────────────────────────────────────────────────────────
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error("FATAL: ANTHROPIC_API_KEY is not set. Exiting.");
+  process.exit(1);
+}
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn("⚠️  ANTHROPIC_API_KEY not set — API calls will fail.");
-  }
 });

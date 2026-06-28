@@ -72,7 +72,7 @@ def test_audit_context_writes_metadata_only(tmp_path: Path):
     assert event["citations"] == 2
     assert event["top_doc"] == "dea.md"
     assert event["reply_len"] == len(secret_reply)
-    assert event["query_len"] == len(secret_query)
+    assert "query_len_bucket" in event
     assert event["status"] == "ok"
     assert len(event["query_hash"]) == 16
     assert "ts" in event

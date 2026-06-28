@@ -46,6 +46,11 @@ ALLOWED_ORIGINS = os.environ.get(
 async def lifespan(app: FastAPI):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log.warning("ANTHROPIC_API_KEY not set — /api/chat will fail")
+    if not os.environ.get("CF_ACCESS_AUD"):
+        log.warning(
+            "CF_ACCESS_AUD not set — authentication is DISABLED. "
+            "All endpoints are publicly accessible. Set CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD for production."
+        )
 
     embedder = build_embedder_from_env()
     if embedder is None:
@@ -79,7 +84,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     tool: Literal["policy", "supervision", "lecture", "chat"]
-    messages: list[Message] = Field(..., min_length=1)
+    messages: list[Message] = Field(..., min_length=1, max_length=100)
     use_rag: bool = True
 
 
@@ -101,15 +106,7 @@ class ChatResponse(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    retriever = app.state.retriever
-    return {
-        "ok": True,
-        "model": ANTHROPIC_MODEL,
-        "rag_enabled": bool(retriever and retriever.ready()),
-        "corpus_chunks": len(retriever.chunks) if retriever and retriever.ready() else 0,
-        "embedder": retriever.embedder.name if retriever and retriever.ready() else None,
-        "access_enforced": bool(os.environ.get("CF_ACCESS_AUD")),
-    }
+    return {"ok": True}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -152,7 +149,8 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
                 messages=[m.model_dump() for m in req.messages],
             )
         except anthropic.APIError as e:
-            raise HTTPException(502, f"anthropic error: {e}") from e
+            log.error("anthropic API error: %s", e)
+            raise HTTPException(502, "upstream AI service error") from e
 
         text = next((b.text for b in resp.content if b.type == "text"), "")
         audit.set_result(reply_len=len(text), citations=citations)

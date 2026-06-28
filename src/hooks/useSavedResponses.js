@@ -28,7 +28,7 @@ export function useSavedResponses() {
       tool: toolId,
       toolLabel,
       content,
-      savedAt: new Date().toLocaleString(),
+      savedAt: new Date().toISOString(),
       title: content.slice(0, 60).replace(/\n/g, " ") + "\u2026",
     };
     setResponses((prev) => [entry, ...prev]);

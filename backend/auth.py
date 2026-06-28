@@ -12,6 +12,7 @@ Reference: https://developers.cloudflare.com/cloudflare-one/identity/authorizati
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -54,16 +55,23 @@ class _JWKSCache:
     def __init__(self) -> None:
         self._keys: dict[str, Any] | None = None
         self._expires: float = 0
+        self._lock = asyncio.Lock()
 
-    def get(self, config: AccessConfig) -> dict[str, Any]:
+    async def get(self, config: AccessConfig) -> dict[str, Any]:
         now = time.time()
         if self._keys and now < self._expires:
             return self._keys
-        resp = httpx.get(config.certs_url, timeout=5.0)
-        resp.raise_for_status()
-        self._keys = resp.json()
-        self._expires = now + JWKS_TTL_SECONDS
-        return self._keys
+        async with self._lock:
+            # Re-check under lock in case another coroutine refreshed while we waited.
+            now = time.time()
+            if self._keys and now < self._expires:
+                return self._keys
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(config.certs_url, timeout=5.0)
+            resp.raise_for_status()
+            self._keys = resp.json()
+            self._expires = now + JWKS_TTL_SECONDS
+            return self._keys
 
 
 _cache = _JWKSCache()
@@ -94,7 +102,7 @@ async def require_access(
         raise HTTPException(401, "missing Cloudflare Access JWT")
 
     try:
-        jwks = _cache.get(config)
+        jwks = await _cache.get(config)
     except httpx.HTTPError as e:  # pragma: no cover -- network
         log.error("could not fetch Access JWKS: %s", e)
         raise HTTPException(503, "auth service unavailable") from e

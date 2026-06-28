@@ -43,8 +43,23 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 DEFAULT_PATH = os.environ.get("AUDIT_LOG_PATH", "./audit.log")
-SALT = os.environ.get("AUDIT_SALT", "medsync8-default-salt-change-me")
+SALT = os.environ.get("AUDIT_SALT", "")
 RECENT_BUFFER_SIZE = 200  # in-memory ring buffer for /api/audit/recent
+
+_SALT_WARNING_ISSUED = False
+
+
+def _get_salt() -> str:
+    global _SALT_WARNING_ISSUED
+    if not SALT:
+        if not _SALT_WARNING_ISSUED:
+            log.warning(
+                "AUDIT_SALT is not set. Audit hashes are unsalted and cross-deployment "
+                "correlation is possible. Set AUDIT_SALT in production."
+            )
+            _SALT_WARNING_ISSUED = True
+        return "medsync8-default-salt-change-me"
+    return SALT
 
 
 def hash_query(text: str, *, salt: str | None = None) -> str:
@@ -53,9 +68,20 @@ def hash_query(text: str, *, salt: str | None = None) -> str:
     16 hex chars = 64 bits; collisions across a single deployment's log
     are effectively impossible while keeping the log compact.
     """
-    s = (salt if salt is not None else SALT).encode("utf-8")
+    s = (salt if salt is not None else _get_salt()).encode("utf-8")
     h = hashlib.sha256(s + b"\x00" + text.encode("utf-8", errors="replace"))
     return h.hexdigest()[:16]
+
+
+def _bucket_query_len(n: int) -> str:
+    """Coarse-bucket query length to reduce side-channel information."""
+    if n < 100:
+        return "<100"
+    if n < 500:
+        return "100-499"
+    if n < 2000:
+        return "500-1999"
+    return "2000+"
 
 
 def identity_from_claims(claims: dict[str, Any] | None) -> str:
@@ -186,7 +212,7 @@ class ChatAuditContext:
             "user": identity_from_claims(self.claims),
             "tool": self.tool,
             "query_hash": hash_query(self.user_query),
-            "query_len": len(self.user_query),
+            "query_len_bucket": _bucket_query_len(len(self.user_query)),
             "reply_len": self._reply_len,
             "citations": len(self._citations),
             "top_doc": self._citations[0]["doc_id"] if self._citations else None,
