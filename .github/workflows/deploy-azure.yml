@@ -1,0 +1,95 @@
+name: Deploy to Azure
+
+# Triggers: every push to main, or manually via Actions UI.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # needed to push to GHCR
+
+jobs:
+  # ── Job 1: Build the Docker image and push to GHCR ─────────────────────────
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image reference
+        id: image
+        run: |
+          echo "ref=ghcr.io/${{ github.repository_owner }}/medsync8:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.ref }}
+            ghcr.io/${{ github.repository_owner }}/medsync8:latest
+          # Layer cache via GitHub Actions cache (free, no registry cost).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Job 2: Deploy Bicep to Azure Container Apps ─────────────────────────────
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production   # enables environment protection rules
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          # Create a service principal and paste the JSON output as AZURE_CREDENTIALS:
+          #   az ad sp create-for-rbac --name medsync8-deploy \
+          #     --role Contributor \
+          #     --scopes /subscriptions/<SUB_ID>/resourceGroups/<RG_NAME> \
+          #     --sdk-auth
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep infrastructure
+        uses: azure/arm-deploy@v2
+        with:
+          resourceGroupName: ${{ vars.AZURE_RESOURCE_GROUP }}
+          template: azure/main.bicep
+          # Inline parameters — secrets are masked in logs by GitHub Actions.
+          parameters: >
+            containerImage=${{ needs.build.outputs.image }}
+            ghcrUsername=${{ github.repository_owner }}
+            ghcrToken=${{ secrets.GHCR_PULL_TOKEN }}
+            anthropicApiKey=${{ secrets.ANTHROPIC_API_KEY }}
+            auditSalt=${{ secrets.AUDIT_SALT }}
+            allowedOrigins=${{ vars.ALLOWED_ORIGINS || '*' }}
+            cfAccessTeamDomain=${{ vars.CF_ACCESS_TEAM_DOMAIN || '' }}
+            cfAccessAud=${{ vars.CF_ACCESS_AUD || '' }}
+          deploymentMode: Incremental
+          deploymentName: medsync8-${{ github.run_number }}
+
+      - name: Print app URL
+        run: |
+          az containerapp show \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -n medsync8 \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv | awk '{print "App URL: https://" $0}'

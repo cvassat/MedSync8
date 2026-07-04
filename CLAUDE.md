@@ -32,7 +32,7 @@ Two server options exist, sharing the same React frontend and the same five tool
 
 **Express proxy (`server.js`, port 3001)** — lightweight dev/simple deployment path. Proxies requests to Anthropic API with rate limiting (20 req/min), message sanitization (50KB cap), and server-side API key. Vite proxies `/api` to this during development.
 
-**FastAPI backend (`backend/server.py`, port 8080)** — production path deployed via Fly.io/Docker. Adds RAG retrieval over `corpus/` documents, Cloudflare Access JWT auth, and hash-only HIPAA-ready audit logging. The Dockerfile prefetches the bge-small-en-v1.5 embedding model (~130MB) at build time.
+**FastAPI backend (`backend/server.py`, port 8080)** — production path deployed via Azure Container Apps or Fly.io. Adds RAG retrieval over `corpus/` documents, Cloudflare Access JWT auth, and hash-only HIPAA-ready audit logging. The Dockerfile prefetches the bge-small-en-v1.5 embedding model (~130MB) at build time.
 
 Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GET /api/health`.
 
@@ -66,3 +66,57 @@ Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GE
 ## Environment Variables
 
 Required: `ANTHROPIC_API_KEY`. See `.env.example` for all options. Copy to `.env` for local development. The Express server reads it via `dotenv/config`; the FastAPI backend reads it directly from `os.environ`.
+
+## Azure Deployment (Container Apps)
+
+Infrastructure lives in `azure/main.bicep`. The GitHub Actions workflow `.github/workflows/deploy-azure.yml` builds the image, pushes to GHCR, and deploys via Bicep on every push to `main`.
+
+### One-time setup
+
+```bash
+# 1. Create a resource group
+az group create -n medsync8-rg -l eastus
+
+# 2. Create a service principal scoped to that group
+az ad sp create-for-rbac \
+  --name medsync8-deploy \
+  --role Contributor \
+  --scopes /subscriptions/<SUB_ID>/resourceGroups/medsync8-rg \
+  --sdk-auth
+# Paste the JSON output as the AZURE_CREDENTIALS GitHub secret.
+
+# 3. Create a GitHub PAT with read:packages scope for GHCR pull at runtime.
+#    Store it as the GHCR_PULL_TOKEN GitHub secret.
+```
+
+### GitHub Actions secrets & variables
+
+| Name | Kind | Value |
+|---|---|---|
+| `AZURE_CREDENTIALS` | Secret | Service principal JSON from step 2 |
+| `ANTHROPIC_API_KEY` | Secret | `sk-ant-...` |
+| `AUDIT_SALT` | Secret | Random 64-char hex |
+| `GHCR_PULL_TOKEN` | Secret | GitHub PAT with `read:packages` |
+| `AZURE_RESOURCE_GROUP` | Variable | `medsync8-rg` |
+| `ALLOWED_ORIGINS` | Variable | `https://your-frontend.azurestaticapps.net` |
+| `CF_ACCESS_TEAM_DOMAIN` | Variable | optional — Cloudflare Access domain |
+| `CF_ACCESS_AUD` | Variable | optional — Cloudflare Access AUD tag |
+
+### Manual deploy (without GitHub Actions)
+
+```bash
+cp azure/parameters.example.json azure/parameters.json
+# Edit azure/parameters.json — fill in all placeholder values.
+az deployment group create \
+  -g medsync8-rg \
+  --template-file azure/main.bicep \
+  --parameters azure/parameters.json
+```
+
+### What gets deployed
+- **Log Analytics workspace** — Container Apps log sink (90-day retention)
+- **Storage account + Azure Files share** — persistent `/data` volume for corpus and audit log
+- **Container Apps environment** — shared compute plane
+- **Container App** — FastAPI backend, 1 vCPU / 2 GiB, scales 0→3 replicas on HTTP traffic
+
+HIPAA note: Azure offers BAA agreements (see Microsoft HIPAA documentation). Enable at the subscription level before storing any PHI.

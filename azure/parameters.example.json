@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus" },
+    "appName": { "value": "medsync8" },
+
+    "containerImage": { "value": "ghcr.io/YOUR_ORG/MedSync8:latest" },
+    "ghcrUsername": { "value": "YOUR_GITHUB_USERNAME_OR_ORG" },
+    "ghcrToken": { "value": "ghp_REPLACE_WITH_PAT_WITH_READ_PACKAGES_SCOPE" },
+
+    "anthropicApiKey": { "value": "sk-ant-REPLACE_WITH_REAL_KEY" },
+    "auditSalt": { "value": "REPLACE_WITH_RANDOM_64_CHAR_HEX" },
+
+    "allowedOrigins": { "value": "https://your-frontend.azurestaticapps.net" },
+
+    "cfAccessTeamDomain": { "value": "" },
+    "cfAccessAud": { "value": "" },
+
+    "anthropicModel": { "value": "claude-opus-4-6" },
+    "embedBackend": { "value": "local" },
+    "ragTopK": { "value": "4" }
+  }
+}
