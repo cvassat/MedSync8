@@ -30,8 +30,8 @@ from .retriever import Retriever, format_context
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("medsync8")
 
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
-MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4096"))
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
 CORPUS_DIR = os.environ.get("CORPUS_DIR", "./corpus")
 TOP_K = int(os.environ.get("RAG_TOP_K", "4"))
 ALLOWED_ORIGINS = os.environ.get(
@@ -145,6 +145,7 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
             resp = app.state.anthropic.messages.create(
                 model=ANTHROPIC_MODEL,
                 max_tokens=MAX_TOKENS,
+                thinking={"type": "adaptive"},
                 system=system_prompt,
                 messages=[m.model_dump() for m in req.messages],
             )

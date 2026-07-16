@@ -17,7 +17,7 @@
     "cfAccessTeamDomain": { "value": "" },
     "cfAccessAud": { "value": "" },
 
-    "anthropicModel": { "value": "claude-opus-4-6" },
+    "anthropicModel": { "value": "claude-opus-4-8" },
     "embedBackend": { "value": "local" },
     "ragTopK": { "value": "4" }
   }

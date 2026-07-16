@@ -75,7 +75,7 @@ function validateRequest(body) {
     content: m.content.slice(0, 50_000),
   }));
 
-  const tokens = Math.min(Math.max(Number(maxTokens) || 4096, 256), 8192);
+  const tokens = Math.min(Math.max(Number(maxTokens) || 8192, 256), 16000);
 
   return { sanitizedMessages, tokens, tool };
 }
@@ -100,8 +100,9 @@ app.post("/api/claude", apiLimiter, async (req, res) => {
     const { sanitizedMessages, tokens, tool } = result;
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-opus-4-8",
       max_tokens: tokens,
+      thinking: { type: "adaptive" },
       system: SYSTEM_PROMPTS[tool],
       messages: sanitizedMessages,
     });
@@ -131,8 +132,9 @@ app.post("/api/claude/stream", apiLimiter, async (req, res) => {
 
   try {
     const stream = anthropic.messages.stream({
-      model: "claude-sonnet-4-6",
+      model: "claude-opus-4-8",
       max_tokens: tokens,
+      thinking: { type: "adaptive" },
       system: SYSTEM_PROMPTS[tool],
       messages: sanitizedMessages,
     });
