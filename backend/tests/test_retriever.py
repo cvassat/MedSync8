@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+
 from backend.retriever import Retriever, _chunk, _sha, format_context
 
 
@@ -33,6 +35,7 @@ def test_retriever_builds_index_and_caches(tiny_corpus: Path, stub_embedder):
     r2.load_or_build()
     assert r2.ready()
     assert len(r2.chunks) == len(r.chunks)
+    assert not (tiny_corpus / "index.json.tmp").exists()
 
 
 def test_retriever_handles_missing_corpus_dir(tmp_path, stub_embedder):
@@ -45,6 +48,8 @@ def test_retriever_handles_missing_corpus_dir(tmp_path, stub_embedder):
 def test_search_returns_topk_hits(tiny_corpus: Path, stub_embedder):
     r = Retriever(str(tiny_corpus), stub_embedder)
     r.load_or_build()
+    norms = np.linalg.norm(r.vectors, axis=1)
+    assert np.allclose(norms, 1.0, atol=1e-5)
     hits = r.search("controlled substances", k=3)
     assert 1 <= len(hits) <= 3
     for h in hits:
