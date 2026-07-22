@@ -17,11 +17,17 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import anthropic
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, model_validator
 
-from .audit import ChatAuditContext, get_logger as get_audit_logger
+from .audit import (
+    ChatAuditContext,
+    get_logger as get_audit_logger,
+    using_default_salt,
+)
 from .auth import require_access
 from .embedders import build_embedder_from_env
 from .prompts import SYSTEM_PROMPTS, VALID_TOOLS
@@ -37,6 +43,8 @@ TOP_K = int(os.environ.get("RAG_TOP_K", "4"))
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
 ).split(",")
+MAX_MESSAGES = int(os.environ.get("CHAT_MAX_MESSAGES", "50"))
+MAX_MESSAGE_CHARS = int(os.environ.get("CHAT_MAX_MESSAGE_CHARS", "20000"))
 
 
 # ---------- lifecycle -------------------------------------------------------
@@ -57,6 +65,11 @@ async def lifespan(app: FastAPI):
         app.state.retriever = retriever
 
     app.state.anthropic = anthropic.Anthropic()
+    if using_default_salt():
+        log.warning(
+            "AUDIT_SALT is using the default development fallback. "
+            "Set AUDIT_SALT to a strong unique value for non-local deployments."
+        )
     yield
 
 
@@ -69,18 +82,52 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def chat_request_validation_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    safe_errors = []
+    for err in exc.errors():
+        clean = dict(err)
+        ctx = clean.get("ctx")
+        if isinstance(ctx, dict) and "error" in ctx:
+            clean["ctx"] = {**ctx, "error": str(ctx["error"])}
+        safe_errors.append(clean)
+
+    if request.url.path == "/api/chat":
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid chat request shape", "errors": safe_errors},
+        )
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
+
+
 # ---------- schemas ---------------------------------------------------------
 
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = Field(..., min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
 class ChatRequest(BaseModel):
     tool: Literal["policy", "supervision", "lecture", "chat"]
-    messages: list[Message] = Field(..., min_length=1)
+    messages: list[Message] = Field(..., min_length=1, max_length=MAX_MESSAGES)
     use_rag: bool = True
+
+    @model_validator(mode="after")
+    def validate_messages(self) -> "ChatRequest":
+        has_user_message = False
+        for message in self.messages:
+            if message.role == "user":
+                if not message.content.strip():
+                    raise ValueError("user messages must not be blank or whitespace-only")
+                has_user_message = True
+
+        if not has_user_message:
+            raise ValueError("chat requires at least one user message")
+
+        return self
 
 
 class Citation(BaseModel):
@@ -109,6 +156,7 @@ def health() -> dict:
         "corpus_chunks": len(retriever.chunks) if retriever and retriever.ready() else 0,
         "embedder": retriever.embedder.name if retriever and retriever.ready() else None,
         "access_enforced": bool(os.environ.get("CF_ACCESS_AUD")),
+        "audit_salt_default": using_default_salt(),
     }
 
 
@@ -123,8 +171,12 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
 
     # Grab the last user message once -- used for retrieval and audit hash.
     last_user = next(
-        (m.content for m in reversed(req.messages) if m.role == "user"), ""
+        (m.content.strip() for m in reversed(req.messages) if m.role == "user" and m.content.strip()),
+        "",
     )
+
+    if not last_user:
+        raise HTTPException(422, "chat requires at least one non-empty user message")
 
     with ChatAuditContext(tool=req.tool, user_query=last_user, claims=claims) as audit:
         if req.use_rag and retriever and retriever.ready() and last_user:
@@ -154,7 +206,15 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
         except anthropic.APIError as e:
             raise HTTPException(502, f"anthropic error: {e}") from e
 
-        text = next((b.text for b in resp.content if b.type == "text"), "")
+        text_blocks = [
+            b.text for b in getattr(resp, "content", [])
+            if getattr(b, "type", None) == "text" and getattr(b, "text", "")
+        ]
+        if not text_blocks:
+            response_types = [getattr(b, "type", "unknown") for b in getattr(resp, "content", [])]
+            log.error("anthropic response missing text block; content types=%s", response_types)
+            raise HTTPException(502, "anthropic response missing text content")
+        text = "\n".join(text_blocks)
         audit.set_result(reply_len=len(text), citations=citations)
 
     return ChatResponse(reply=text, citations=citations, model=ANTHROPIC_MODEL)

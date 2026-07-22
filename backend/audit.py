@@ -43,8 +43,19 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 DEFAULT_PATH = os.environ.get("AUDIT_LOG_PATH", "./audit.log")
-SALT = os.environ.get("AUDIT_SALT", "medsync8-default-salt-change-me")
+DEFAULT_AUDIT_SALT = "medsync8-default-salt-change-me"
+SALT = os.environ.get("AUDIT_SALT", DEFAULT_AUDIT_SALT)
 RECENT_BUFFER_SIZE = 200  # in-memory ring buffer for /api/audit/recent
+
+
+def using_default_salt() -> bool:
+    return SALT == DEFAULT_AUDIT_SALT
+
+
+if using_default_salt():
+    log.warning(
+        "AUDIT_SALT is using the default development fallback; set a unique value for deployments."
+    )
 
 
 def hash_query(text: str, *, salt: str | None = None) -> str:

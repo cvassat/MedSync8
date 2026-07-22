@@ -35,6 +35,7 @@ def test_health_reports_rag_enabled(client):
     assert body["ok"] is True
     assert body["rag_enabled"] is True
     assert body["corpus_chunks"] > 0
+    assert "audit_salt_default" in body
 
 
 def test_chat_returns_reply_and_citations(client, stub_anthropic):
@@ -77,6 +78,54 @@ def test_chat_rejects_unknown_tool(client):
 def test_chat_requires_at_least_one_message(client):
     r = client.post("/api/chat", json={"tool": "chat", "messages": []})
     assert r.status_code == 422
+    assert r.json()["detail"] == "invalid chat request shape"
+
+
+def test_chat_rejects_blank_user_message(client):
+    r = client.post("/api/chat", json={
+        "tool": "chat",
+        "messages": [{"role": "user", "content": "   "}],
+    })
+    assert r.status_code == 422
+    body = r.json()
+    assert body["detail"] == "invalid chat request shape"
+    assert "whitespace-only" in str(body["errors"]).lower()
+
+
+def test_chat_rejects_too_many_messages(client):
+    msgs = [{"role": "user", "content": f"msg-{i}"} for i in range(51)]
+    r = client.post("/api/chat", json={"tool": "chat", "messages": msgs})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "invalid chat request shape"
+
+
+def test_chat_rejects_message_exceeding_max_length(client):
+    r = client.post("/api/chat", json={
+        "tool": "chat",
+        "messages": [{"role": "user", "content": "a" * 20001}],
+    })
+    assert r.status_code == 422
+    assert r.json()["detail"] == "invalid chat request shape"
+
+
+def test_chat_handles_anthropic_response_without_text_block(client, stub_anthropic):
+    class _NonTextBlock:
+        type = "tool_use"
+
+    class _NoTextResponse:
+        content = [_NonTextBlock()]
+
+    def _create_without_text(**kwargs):
+        stub_anthropic.last_call = kwargs
+        return _NoTextResponse()
+
+    stub_anthropic.messages.create = _create_without_text
+    r = client.post("/api/chat", json={
+        "tool": "chat",
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    assert r.status_code == 502
+    assert r.json()["detail"] == "anthropic response missing text content"
 
 
 def test_chat_writes_audit_event_without_query_text(client):
