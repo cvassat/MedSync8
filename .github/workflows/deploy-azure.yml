@@ -19,10 +19,10 @@ jobs:
       image: ${{ steps.image.outputs.ref }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -34,10 +34,10 @@ jobs:
           echo "ref=ghcr.io/${{ github.repository_owner }}/medsync8:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
@@ -56,10 +56,10 @@ jobs:
     environment: production   # enables environment protection rules
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2
         with:
           # Create a service principal and paste the JSON output as AZURE_CREDENTIALS:
           #   az ad sp create-for-rbac --name medsync8-deploy \
@@ -69,7 +69,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy Bicep infrastructure
-        uses: azure/arm-deploy@v2
+        uses: azure/arm-deploy@a1361c2c2cd398621955b16ca32e01c65ea340f5 # v2
         with:
           resourceGroupName: ${{ vars.AZURE_RESOURCE_GROUP }}
           template: azure/main.bicep
