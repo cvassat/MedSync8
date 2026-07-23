@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>A patient in a subsequent CoCM month has accrued 137 care-manager minutes and has an initiating visit on file. How many 99494 add-on units does this month support?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Under the medicare-wi payer model, what is the estimated payment in USD for an initial CoCM month where the patient accrued exactly 36 minutes with an initiating visit on file?</question>
+    <answer>154.22</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the total modeled payment in USD at medicare-natl rates for a claim consisting of one 99492 and three units of 99494?</question>
+    <answer>372.0</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A subsequent-month CoCM patient accrued exactly 30 minutes with an initiating visit on file. What is the estimated wi-medicaid rate in USD for the code this month qualifies for (no ForwardHealth override loaded)?</question>
+    <answer>47.6</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the portal-verified Wisconsin Medicaid rate in USD for the BHIC medical home comprehensive care coordination and planning initial plan code?</question>
+    <answer>473.64</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many entries are in the Initiating category of the billing code catalogue?</question>
+    <answer>8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>An initial-month CoCM patient has accrued 85 minutes with an initiating visit on file. At what minute count does their next 99494 add-on unit unlock?</question>
+    <answer>86</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Evaluate this panel at medicare-natl rates, all with initiating visits on file: PT-A cocm initial 70 minutes, PT-B cocm subsequent 29 minutes, PT-C bhi 20 minutes. How many patients are billable this month?</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In USD, how much higher is the medicare-natl rate for 99492 than for 99493?</question>
+    <answer>32</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>According to the code catalogue, which APCM companion add-on code mirrors 99493 for subsequent CoCM months?</question>
+    <answer>G0569</answer>
+  </qa_pair>
+</evaluation>

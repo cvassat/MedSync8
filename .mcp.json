@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "medsync8-billing": {
+      "command": "python3",
+      "args": ["mcp/cocm_billing_server.py"]
+    }
+  }
+}
