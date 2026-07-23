@@ -1,0 +1,41 @@
+version: 2
+updates:
+  # Bump pinned action SHAs when upstream tags move. Dependabot updates the
+  # SHA and the trailing version comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Frontend + Express proxy dependencies. Grouped monthly to keep PR noise
+  # low; security updates still open immediately regardless of schedule.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Majors reviewed manually — vite/react majors can need config changes.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Python backend dependencies.
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore"
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
