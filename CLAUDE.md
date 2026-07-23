@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Run Commands
 
-### Frontend (React + Vite + Express proxy)
+### Frontend (React + Vite 8 + Express proxy)
 ```bash
 npm install              # install dependencies
 npm run dev              # start both Vite (5173) and Express (3001) concurrently
@@ -17,22 +17,31 @@ npm run build            # production build to dist/
 ```bash
 pip install -r backend/requirements-test.txt   # test deps (no torch, fast install)
 pip install -r backend/requirements.txt         # full deps (includes sentence-transformers)
-python -m pytest backend/tests -q              # run all backend tests
+python -m pytest backend/tests -q              # run backend tests
+python -m pytest tests -q                      # run root tests (sync calculator)
 python -m pytest backend/tests/test_server.py -v  # run a single test file
 python -m pytest backend/tests/test_audit.py::test_hash_query_deterministic_and_salted  # single test
 uvicorn backend.server:app --port 8000         # run FastAPI locally
 ```
 
+### Clinical Scripts & MCP Server
+```bash
+python3 scripts/cocm_time_tracker.py --list-codes            # billing code catalogue + rate table
+python3 scripts/cocm_time_tracker.py --minutes 72 --month initial --initiating-visit yes --payer medicare-wi
+python3 scripts/credentialing_alert.py                       # needs CREDENTIALING_WORKBOOK + TEAMS_WEBHOOK_URL
+pip install -r mcp/requirements.txt && python3 mcp/cocm_billing_server.py   # MCP server (stdio)
+```
+
 ### CI
-CI runs on every PR and push to main: `pytest backend/tests -q` (Python 3.11) and `npm run build` (Node 20) in parallel.
+CI runs on every PR and push to main: `pytest backend/tests -q` (Python 3.11) and `npm run build` (Node 20) in parallel. All workflow actions are pinned to full-length commit SHAs; Dependabot bumps them weekly (`.github/dependabot.yml`).
 
 ## Architecture
 
-Two server options exist, sharing the same React frontend and the same five tool system prompts:
+Two server options exist, sharing the same React frontend and the same five tool system prompts. Both call `claude-opus-4-8` with adaptive thinking (`thinking: {type: "adaptive"}`); the text-block filtering in both paths silently drops thinking blocks.
 
 **Express proxy (`server.js`, port 3001)** — lightweight dev/simple deployment path. Proxies requests to Anthropic API with rate limiting (20 req/min), message sanitization (50KB cap), and server-side API key. Vite proxies `/api` to this during development.
 
-**FastAPI backend (`backend/server.py`, port 8080)** — production path deployed via Azure Container Apps or Fly.io. Adds RAG retrieval over `corpus/` documents, Cloudflare Access JWT auth, and hash-only HIPAA-ready audit logging. The Dockerfile prefetches the bge-small-en-v1.5 embedding model (~130MB) at build time.
+**FastAPI backend (`backend/server.py`, port 8080)** — production path deployed via Azure Container Apps or Fly.io. Adds RAG retrieval over `corpus/` documents, Cloudflare Access JWT auth, and hash-only HIPAA-ready audit logging. The Dockerfile prefetches the bge-small-en-v1.5 embedding model (~130MB) at build time. `RUNBOOK.md` documents the PHI boundary — no PHI until BAA + local embeddings are confirmed.
 
 Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GET /api/health`.
 
@@ -45,7 +54,15 @@ Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GE
 `backend/retriever.py` indexes `corpus/` files → chunks with overlap → embeddings (local sentence-transformers or OpenAI) → cosine similarity search. Index cached to `corpus/index.json` keyed by embedder name. `backend/embedders.py` provides pluggable `Embedder` protocol (set `EMBED_BACKEND=local|openai`).
 
 ### Auth & Audit (Python backend only)
-`backend/auth.py`: Optional Cloudflare Access JWT verification (enabled when `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` are set). `backend/audit.py`: Append-only JSONL log recording hashed queries (never raw text), user identity, tool, latency, and citation count.
+`backend/auth.py`: Optional Cloudflare Access JWT verification (enabled when `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` are set). `backend/audit.py`: Append-only JSONL log recording salted hashed queries (never raw text), user identity, tool, latency, and citation count. Never log raw query text or weaken the salting.
+
+### Clinical billing stack
+`scripts/cocm_time_tracker.py` is the **single source of billing truth**: CMS midpoint-rule eligibility (99492 ≥36, 99493 ≥31, 99494 at target+16 then every 30, G2214 ≥30, 99484 ≥20), the full code catalogue (including G0512 and the CY2026 APCM add-ons G0568–G0570, which are *additions*, not replacements), and a three-payer rate model (`medicare-natl`, `medicare-wi` GPCI-adjusted, `wi-medicaid` with `WI_MEDICAID_RATES_JSON` portal override). `mcp/cocm_billing_server.py` imports its functions directly and exposes them as six read-only MCP tools (registered in `.mcp.json` as `medsync8-billing`) — a threshold change in the script propagates to the CLI, MCP tools, and audits simultaneously. After any change to billing thresholds, the `billing-auditor` agent (`.claude/agents/billing-auditor.md`) re-runs boundary-value checks; use it proactively.
+
+`scripts/credentialing_alert.py` reads the licensing star-schema workbook and posts a ranked Teams MessageCard. Exit codes: 0 ok, 1 delivery failed, 2 workbook unreadable. Time-dependent logic takes `today: date` as a parameter — never call `date.today()` inside classification logic.
+
+### Legacy modules
+`sync_calculator.py` (medication synchronization quantities; tested by `tests/test_sync_calculator.py`) and `med_sync_app_with_stripe.py` (old Streamlit app with Supabase/Stripe) predate the workbench and are not part of either server path.
 
 ## Key Conventions
 
@@ -53,23 +70,29 @@ Both expose: `POST /api/claude` (or `/api/chat`), `POST /api/claude/stream`, `GE
 - **TOOL_MAP** in `constants.js` provides O(1) lookups; use it instead of `TOOLS.find()`.
 - **ERROR_PREFIX** (`⚠️`) in `constants.js` is the shared sentinel for error messages — used in `App.jsx` and `MessageBubble.jsx` to detect error state.
 - **Streaming callbacks** (`sendMessage`) use `setConversations` functional updaters to avoid capturing stale `conversations` in the dependency array — this prevents callback recreation on every streaming chunk.
-- Backend tests use `StubEmbedder` and `StubAnthropic` from `conftest.py` — no network calls needed.
+- Backend tests use `StubEmbedder` and `StubAnthropic` from `conftest.py` — no network calls needed. New external dependencies get a stub, not a live call.
 - Python imports use relative form within the backend package (e.g., `from .audit import ChatAuditContext`).
+- Billing scripts carry decision-support disclaimers and rate-confidence labels (`verified_secondary`, `estimated`, `portal_verified`) — never remove them or upgrade a label without a verifying source. Boundary-test billing edges (35/36, 30/31, target+15/+16, 19/20) after eligibility changes.
+- File naming for user-facing artifacts: hyphens, never underscores.
+
+## AI-Agent Governance
+
+This repo carries an instruction-file layer that applies to all coding agents: `.github/copilot-instructions.md` (repository-wide baseline, versioned), `AGENTS.md` (operational guide, hard boundaries, when-blocked rules), and path-scoped `.github/instructions/*.instructions.md` (actions, python, docs, tests — these win for their paths). Do not modify any of them unless the task is specifically an instructions update. Key hard rules: no PHI anywhere including fixtures and `corpus/`; no new unpinned Actions (full-length SHA pins only); synthetic test data only.
 
 ## Security Notes
 
 - **Express proxy**: Set `ALLOWED_ORIGIN` in production (defaults to localhost). `trust proxy 1` is set — verify your proxy hop count matches your infra.
 - **FastAPI auth**: Set `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` for Cloudflare Access JWT validation. Without these, all endpoints are publicly accessible (dev only).
-- **Audit salt**: Set `AUDIT_SALT` env var in production to a random secret. Without it, audit hashes are unsalted (warning is logged).
+- **Audit salt**: Set `AUDIT_SALT` env var in production to a random secret. Without it, audit hashes use a default salt (warning is logged at import).
 - **ANTHROPIC_API_KEY**: Express server will exit at startup if missing. FastAPI logs a warning.
 
 ## Environment Variables
 
-Required: `ANTHROPIC_API_KEY`. See `.env.example` for all options. Copy to `.env` for local development. The Express server reads it via `dotenv/config`; the FastAPI backend reads it directly from `os.environ`.
+Required: `ANTHROPIC_API_KEY`. See `.env.example` for all options. Copy to `.env` for local development. The Express server reads it via `dotenv/config`; the FastAPI backend reads it directly from `os.environ`. Billing rate overrides: `WI_MEDICAID_RATES_JSON`, `WI_MEDICAID_FACTOR`. Credentialing alert: `CREDENTIALING_WORKBOOK`, `TEAMS_WEBHOOK_URL`, `TEAMS_CHANNEL_WEBHOOK`.
 
 ## Azure Deployment (Container Apps)
 
-Infrastructure lives in `azure/main.bicep`. The GitHub Actions workflow `.github/workflows/deploy-azure.yml` builds the image, pushes to GHCR, and deploys via Bicep on every push to `main`.
+Infrastructure lives in `azure/main.bicep`. The GitHub Actions workflow `.github/workflows/deploy-azure.yml` builds the image, pushes to GHCR, and deploys via Bicep on every push to `main`. The `production` environment gates deployment.
 
 ### One-time setup
 
@@ -120,3 +143,7 @@ az deployment group create \
 - **Container App** — FastAPI backend, 1 vCPU / 2 GiB, scales 0→3 replicas on HTTP traffic
 
 HIPAA note: Azure offers BAA agreements (see Microsoft HIPAA documentation). Enable at the subscription level before storing any PHI.
+
+## Further Documentation
+
+`docs/USER_GUIDE.md` (end-user guide: web app, scripts, troubleshooting) · `RUNBOOK.md` (Fly.io ops + PHI boundary) · `backend/README.md` (backend specifics).
