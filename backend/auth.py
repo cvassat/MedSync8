@@ -119,3 +119,37 @@ async def require_access(
         raise HTTPException(401, f"invalid Access JWT: {e}") from e
 
     return claims
+
+
+async def require_admin(
+    request: Request,
+    cf_access_jwt_assertion: str | None = Header(default=None, alias="CF-Access-JWT-Assertion"),
+) -> dict[str, Any]:
+    """FastAPI dependency for admin-only endpoints (e.g. the audit log).
+
+    Builds on require_access, then checks the authenticated email against
+    AUDIT_ADMIN_EMAILS (comma-separated, case-insensitive). When Access is
+    enabled but AUDIT_ADMIN_EMAILS is unset, admin endpoints are closed --
+    fail shut, not open. When Access itself is disabled (local dev), admin
+    endpoints stay open like everything else.
+    """
+    claims = await require_access(request, cf_access_jwt_assertion)
+    if not claims:  # Access disabled -- dev/test mode
+        return claims
+
+    admins = {
+        e.strip().lower()
+        for e in os.environ.get("AUDIT_ADMIN_EMAILS", "").split(",")
+        if e.strip()
+    }
+    if not admins:
+        raise HTTPException(
+            403,
+            "audit access not configured: set AUDIT_ADMIN_EMAILS to a "
+            "comma-separated allowlist of admin emails",
+        )
+    email = str(claims.get("email", "")).strip().lower()
+    if email not in admins:
+        log.warning("audit access denied for %s", email or "<no email claim>")
+        raise HTTPException(403, "not authorized for audit access")
+    return claims

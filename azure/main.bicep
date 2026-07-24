@@ -86,6 +86,60 @@ resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-0
   properties: { shareQuota: 5 }  // 5 GB — holds corpus + audit log
 }
 
+// ── Key Vault (runtime secret source) ─────────────────────────────────────────
+// Secure params seed the vault at deploy time; the Container App reads secrets
+// at runtime via a user-assigned managed identity — secrets never sit in
+// Container Apps configuration as plain values.
+
+resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${appName}-identity'
+  location: location
+}
+
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: take('${safeAppName}kv${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  properties: {
+    sku: { family: 'A', name: 'standard' }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+  }
+}
+
+resource kvAnthropicKey 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'anthropic-api-key'
+  properties: { value: anthropicApiKey }
+}
+
+resource kvAuditSalt 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'audit-salt'
+  properties: { value: auditSalt }
+}
+
+resource kvGhcrToken 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'ghcr-token'
+  properties: { value: ghcrToken }
+}
+
+// Key Vault Secrets User — lets the app identity read (not manage) secrets.
+resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, uami.id, 'kv-secrets-user')
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
+    )
+    principalId: uami.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // ── Container Apps Environment ────────────────────────────────────────────────
 
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -121,6 +175,14 @@ resource dataStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${uami.id}': {}
+    }
+  }
+  // Secret references resolve at runtime — the role assignment must exist first.
+  dependsOn: [kvSecretsUser]
   properties: {
     managedEnvironmentId: containerEnv.id
     configuration: {
@@ -139,9 +201,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         allowInsecure: false
       }
       secrets: [
-        { name: 'anthropic-api-key', value: anthropicApiKey }
-        { name: 'audit-salt', value: auditSalt }
-        { name: 'ghcr-token', value: ghcrToken }
+        { name: 'anthropic-api-key', keyVaultUrl: kvAnthropicKey.properties.secretUri, identity: uami.id }
+        { name: 'audit-salt', keyVaultUrl: kvAuditSalt.properties.secretUri, identity: uami.id }
+        { name: 'ghcr-token', keyVaultUrl: kvGhcrToken.properties.secretUri, identity: uami.id }
       ]
     }
     template: {

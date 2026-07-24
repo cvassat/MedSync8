@@ -56,7 +56,7 @@ def access_client(monkeypatch, tiny_corpus: Path, stub_embedder, stub_anthropic,
     monkeypatch.setenv("CF_ACCESS_AUD", "test-aud-xyz")
 
     # Stub out JWKS fetch to return the test public key
-    def fake_get(_config):
+    async def fake_get(_config):
         return {
             "keys": [
                 {
@@ -132,3 +132,37 @@ def test_health_reports_access_enforced(access_client):
     client, _ = access_client
     body = client.get("/api/health").json()
     assert body["access_enforced"] is True
+
+
+def test_audit_closed_when_allowlist_unset(access_client, monkeypatch):
+    monkeypatch.delenv("AUDIT_ADMIN_EMAILS", raising=False)
+    client, keypair = access_client
+    token = _issue_token(
+        keypair, aud="test-aud-xyz", iss="https://acme.cloudflareaccess.com"
+    )
+    r = client.get("/api/audit/recent", headers={"CF-Access-JWT-Assertion": token})
+    assert r.status_code == 403
+    assert "AUDIT_ADMIN_EMAILS" in r.json()["detail"]
+
+
+def test_audit_denied_for_non_admin(access_client, monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_EMAILS", "admin@example.com")
+    client, keypair = access_client
+    token = _issue_token(
+        keypair, aud="test-aud-xyz", iss="https://acme.cloudflareaccess.com",
+        email="user@example.com",
+    )
+    r = client.get("/api/audit/recent", headers={"CF-Access-JWT-Assertion": token})
+    assert r.status_code == 403
+
+
+def test_audit_allowed_for_admin(access_client, monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_EMAILS", "Admin@Example.com, second@example.com")
+    client, keypair = access_client
+    token = _issue_token(
+        keypair, aud="test-aud-xyz", iss="https://acme.cloudflareaccess.com",
+        email="admin@example.com",
+    )
+    r = client.get("/api/audit/recent", headers={"CF-Access-JWT-Assertion": token})
+    assert r.status_code == 200
+    assert "events" in r.json()

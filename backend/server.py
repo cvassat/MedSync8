@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .audit import ChatAuditContext, get_logger as get_audit_logger
-from .auth import require_access
+from .auth import load_config as load_access_config, require_access, require_admin
 from .embedders import build_embedder_from_env
 from .prompts import SYSTEM_PROMPTS, VALID_TOOLS
 from .retriever import Retriever, format_context
@@ -106,7 +106,12 @@ class ChatResponse(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True}
+    # Attest enforcement when it's on; never advertise that auth is disabled
+    # on this unauthenticated endpoint (test_health_does_not_expose_internals).
+    body: dict = {"ok": True}
+    if load_access_config() is not None:
+        body["access_enforced"] = True
+    return body
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -162,13 +167,13 @@ def chat(req: ChatRequest, claims: dict = Depends(require_access)) -> ChatRespon
 @app.get("/api/audit/recent")
 def audit_recent(
     limit: int = 50,
-    claims: dict = Depends(require_access),
+    claims: dict = Depends(require_admin),
 ) -> dict:
     """Return the last N audit events (metadata only -- no query text).
 
-    Gated by the same Cloudflare Access dependency as /api/chat. Restrict
-    further with an Access policy (e.g. admin group) on the CF side if
-    needed -- this endpoint does not do role checks itself.
+    Admin-only: requires Cloudflare Access AND membership in the
+    AUDIT_ADMIN_EMAILS allowlist. With Access enabled but no allowlist
+    configured, this endpoint is closed (403) -- fail shut.
     """
     limit = max(1, min(limit, 200))
     events = get_audit_logger().recent(limit=limit)

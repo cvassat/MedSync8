@@ -82,7 +82,7 @@ This repo carries an instruction-file layer that applies to all coding agents: `
 ## Security Notes
 
 - **Express proxy**: Set `ALLOWED_ORIGIN` in production (defaults to localhost). `trust proxy 1` is set — verify your proxy hop count matches your infra.
-- **FastAPI auth**: Set `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` for Cloudflare Access JWT validation. Without these, all endpoints are publicly accessible (dev only).
+- **FastAPI auth**: Set `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD` for Cloudflare Access JWT validation. Without these, all endpoints are publicly accessible (dev only). `/api/audit/recent` additionally requires membership in `AUDIT_ADMIN_EMAILS` (comma-separated allowlist) — with Access on but no allowlist set, the endpoint fails shut (403). `/api/health` attests `access_enforced: true` when Access is on but never advertises when it's off.
 - **Audit salt**: Set `AUDIT_SALT` env var in production to a random secret. Without it, audit hashes use a default salt (warning is logged at import).
 - **ANTHROPIC_API_KEY**: Express server will exit at startup if missing. FastAPI logs a warning.
 
@@ -138,6 +138,7 @@ az deployment group create \
 
 ### What gets deployed
 - **Log Analytics workspace** — Container Apps log sink (90-day retention)
+- **Key Vault + user-assigned managed identity** — runtime secret source; GitHub secrets seed the vault at deploy time, and the Container App reads them via `keyVaultUrl` references (Key Vault Secrets User role), so secret values never sit in Container Apps configuration
 - **Storage account + Azure Files share** — persistent `/data` volume for corpus and audit log
 - **Container Apps environment** — shared compute plane
 - **Container App** — FastAPI backend, 1 vCPU / 2 GiB, scales 0→3 replicas on HTTP traffic

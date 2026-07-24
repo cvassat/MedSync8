@@ -56,8 +56,10 @@ class StubAnthropic:
             self._parent = parent
 
         def create(self, *, model: str, max_tokens: int, system: str,
-                   messages: list[dict[str, Any]]) -> _AnthropicMessage:
-            self._parent.last_call = {"model": model, "system": system, "messages": messages}
+                   messages: list[dict[str, Any]],
+                   thinking: dict[str, Any] | None = None) -> _AnthropicMessage:
+            self._parent.last_call = {"model": model, "system": system,
+                                      "messages": messages, "thinking": thinking}
             last_user = next(
                 (m["content"] for m in reversed(messages) if m["role"] == "user"),
                 "",
