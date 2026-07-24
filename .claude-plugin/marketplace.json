@@ -1,0 +1,13 @@
+{
+  "name": "medsync8",
+  "owner": {
+    "name": "cvassat"
+  },
+  "plugins": [
+    {
+      "name": "medsync8-billing",
+      "source": "./plugins/medsync8-billing",
+      "description": "CoCM/BHI billing decision support: MCP tools for CMS midpoint-rule eligibility, per-payer rates (Medicare national/WI, WI Medicaid), claim pricing, and panel evaluation, plus the billing-auditor agent and /billing-check command."
+    }
+  ]
+}

@@ -33,7 +33,7 @@ pip install -r mcp/requirements.txt && python3 mcp/cocm_billing_server.py   # MC
 ```
 
 ### CI
-CI runs on every PR and push to main: `pytest backend/tests -q` (Python 3.11) and `npm run build` (Node 20) in parallel. All workflow actions are pinned to full-length commit SHAs; Dependabot bumps them weekly (`.github/dependabot.yml`).
+CI runs on every PR and push to main: `pytest backend/tests tests -q` (Python 3.11) and `npm run build` (Node 20) in parallel. The root suite includes `tests/test_plugin_sync.py`, which fails if the plugin's vendored billing tracker drifts from `scripts/cocm_time_tracker.py`. All workflow actions are pinned to full-length commit SHAs; Dependabot bumps them weekly (`.github/dependabot.yml`).
 
 ## Architecture
 

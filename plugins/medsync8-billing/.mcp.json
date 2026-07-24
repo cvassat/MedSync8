@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "medsync8-billing": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/cocm_billing_server.py"]
+    }
+  }
+}
