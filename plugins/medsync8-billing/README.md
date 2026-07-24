@@ -13,7 +13,7 @@ CoCM/BHI billing decision support for Claude Code, packaged as one installable p
 
 ```bash
 # From the MedSync8 repo as a marketplace:
-/plugin marketplace add cvassat/MedSync8
+/plugin marketplace add NEH-Psychiatry/MedSync8
 /plugin install medsync8-billing@medsync8
 ```
 

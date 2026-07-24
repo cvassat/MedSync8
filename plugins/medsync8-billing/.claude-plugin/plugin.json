@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "CoCM/BHI billing decision support for psychiatric practices: CMS midpoint-rule eligibility (99492/99493/99494/G2214/99484), full code catalogue including CY2026 APCM add-ons, three-payer rate model, claim pricing, whole-panel evaluation, and an adversarial billing auditor. Decision-support only — verify against the current CMS Physician Fee Schedule.",
   "author": {
-    "name": "cvassat"
+    "name": "NEH-Psychiatry"
   },
   "keywords": ["cocm", "bhi", "billing", "cms", "psychiatry", "collaborative-care"]
 }
